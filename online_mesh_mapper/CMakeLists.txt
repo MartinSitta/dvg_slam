@@ -16,7 +16,9 @@ find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)                                                      
 find_package(tf2_ros REQUIRED)                                                  
 find_package(tf2_geometry_msgs REQUIRED)                                        
-find_package(geometry_msgs REQUIRED)   
+find_package(geometry_msgs REQUIRED)
+find_package(octomap REQUIRED)
+find_package(octomap_msgs REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -31,7 +33,7 @@ target_compile_features(online_mesh_mapper PUBLIC c_std_99 cxx_std_17)  # Requir
 
 target_link_libraries(online_mesh_mapper lib_map_model)
 ament_target_dependencies(online_mesh_mapper rclcpp sensor_msgs mesh_msgs nav_msgs
-    tf2_ros tf2 tf2_geometry_msgs geometry_msgs)
+    tf2_ros tf2 tf2_geometry_msgs geometry_msgs octomap octomap_msgs)
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/
