@@ -20,10 +20,10 @@ typedef struct{
     int64_t z_offset;
     uint16_t current_node_index;
     GraphNode_t nodes[CHUNK_NODE_LIMIT];
-chunk_node_array_entry_t node_hash_table[CHUNK_NODE_HASHTABLE_SIZE];
+    chunk_node_array_entry_t node_hash_table[CHUNK_NODE_HASHTABLE_SIZE];
 }Chunk_t;
 
-Chunk_t chunk_init();
+Chunk_t* chunk_init();
 bool chunk_insert( Chunk_t* chunk, int64_t x, int64_t y, int64_t z);
 bool chunk_delete(Chunk_t* chunk, int64_t x, int64_t y, int64_t z);
 uint8_t chunk_request_node(Chunk_t* chunk, uint16_t coords); //I have to change the return type to uint8_t cause I need more output codes

@@ -1568,8 +1568,10 @@ class OnlineMeshMapper : public rclcpp::Node{
         vertex_normals.push_back(foward_normal);
         OutVertex_t back_normal = {-1.0f, 0.0f, 0.0f};
         vertex_normals.push_back(back_normal);
-        for(uint32_t i = 0; i < graph->current_chunk_index; i++){
-            v2_mesher_get_faces_and_verts(&graph->chunks[i], &in_faces, &in_vertices, &vertex_hash_table, true);
+        for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
+            if(graph->chunk_hash_table[i] != NULL){
+                v2_mesher_get_faces_and_verts(graph->chunk_hash_table[i], &in_faces, &in_vertices, &vertex_hash_table, true);
+            }
         }
         greedy_mesher_enter_vertices(&in_faces, &in_vertices, &vertex_hash_table);
         if(ros2_msg_greedy_mesher){
@@ -1614,19 +1616,19 @@ class OnlineMeshMapper : public rclcpp::Node{
         int64_t y_pos_target = global_point.y + hor_chunk_radius * 32;
         int64_t z_neg_target = global_point.z - vert_chunk_radius * 32;
         int64_t z_pos_target = global_point.z + vert_chunk_radius * 32;
-        std::vector<uint32_t> chunk_indices;
+        std::vector<Chunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += 32){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += 32){
                 for(int64_t z = z_neg_target; z <= z_pos_target; z += 32){
-                    int64_t chunk_index = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
-                    if(chunk_index >= 0){
-                        chunk_indices.push_back(chunk_index);
+                    Chunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+                    if(chunk != NULL){
+                        chunk_ptrs.push_back(chunk);
                     }
                 }
             }
         }
-        for(uint32_t i = 0; i < chunk_indices.size(); i++){
-            v2_mesher_get_faces_and_verts(&graph->chunks[chunk_indices.at(i)], &in_faces, &in_vertices, &vertex_hash_table, true);
+        for(uint32_t i = 0; i < chunk_ptrs.size(); i++){
+            v2_mesher_get_faces_and_verts(chunk_ptrs.at(i), &in_faces, &in_vertices, &vertex_hash_table, true);
         }
         greedy_mesher_enter_vertices(&in_faces, &in_vertices, &vertex_hash_table);
         if(ros2_msg_greedy_mesher){
@@ -1666,19 +1668,19 @@ class OnlineMeshMapper : public rclcpp::Node{
         int64_t y_pos_target = global_point.y + hor_chunk_radius * 32;
         int64_t z_neg_target = global_point.z - vert_chunk_radius * 32;
         int64_t z_pos_target = global_point.z + vert_chunk_radius * 32;
-        std::vector<uint32_t> chunk_indices;
+        std::vector<Chunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += 32){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += 32){
                 for(int64_t z = z_neg_target; z <= z_pos_target; z += 32){
-                    int64_t chunk_index = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
-                    if(chunk_index >= 0){
-                        chunk_indices.push_back(chunk_index);
+                    Chunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+                    if(chunk != NULL){
+                        chunk_ptrs.push_back(chunk);
                     }
                 }
             }
         }
-        for(uint32_t i = 0; i < chunk_indices.size(); i++){
-            thread* t = new thread(&OnlineMeshMapper::build_mesh_section_global, this, chunk_indices.at(i), chunk_indices.at(i), graph, &chunk_local_meshes, false);
+        for(uint32_t i = 0; i < chunk_ptrs.size(); i++){
+            thread* t = new thread(&OnlineMeshMapper::build_mesh_section_global, this, i, chunk_ptrs.at(i), &chunk_local_meshes, false);
             active_threads.push_back(t);
         }
         for(uint32_t i = 0; i < active_threads.size(); i++){
@@ -1688,12 +1690,12 @@ class OnlineMeshMapper : public rclcpp::Node{
         return;
 
     }
-    static void build_mesh_section_global(OnlineMeshMapper* self, uint32_t first_index, uint32_t last_index,
-            VoxelGraph_t* graph, std::vector<ChunkMesh_t>* output, bool wavefront){
-        for(uint32_t i = first_index; i <= last_index; i++){
+    static void build_mesh_section_global(OnlineMeshMapper* self, uint32_t vect_index,
+            Chunk_t* chunk, std::vector<ChunkMesh_t>* output, bool wavefront){
+        //for(uint32_t i = first_index; i <= last_index; i++){
             //output->at(i) = self->genChunkMesh(&(graph->chunks[i]));
-            output->at(i) = self->gen_chunk_mesh_with_greedy_mesher(&(graph->chunks[i]), wavefront);
-        }
+        output->at(vect_index) = self->gen_chunk_mesh_with_greedy_mesher(chunk, wavefront);
+        //}
         return;
     }
     void build_and_publish_mesh(VoxelGraph_t* graph, rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
@@ -1732,8 +1734,14 @@ class OnlineMeshMapper : public rclcpp::Node{
         
         //if(currentIndex < graph->current_chunk_index)
         //{
-        for(uint32_t i = 0; i < graph->current_chunk_index; i++){
-            thread* t = new thread(&OnlineMeshMapper::build_mesh_section_global, this, i, i, graph, &chunk_local_meshes, false);
+        std::vector<Chunk_t*> chunk_ptrs;
+        for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
+            if(graph->chunk_hash_table[i] != NULL){
+                chunk_ptrs.push_back(graph->chunk_hash_table[i]);
+            }
+        }
+        for(uint32_t i = 0; i < chunk_ptrs.size(); i++){
+            thread* t = new thread(&OnlineMeshMapper::build_mesh_section_global, this, i, chunk_ptrs.at(i), &chunk_local_meshes, false);
             active_threads.push_back(t); 
         }
         for(uint32_t i = 0; i < active_threads.size(); i++){
@@ -1812,8 +1820,10 @@ class OnlineMeshMapper : public rclcpp::Node{
         vertex_normals.push_back(foward_normal);
         OutVertex_t back_normal = {-1.0f, 0.0f, 0.0f};
         vertex_normals.push_back(back_normal);
-        for(uint32_t i = 0; i < graph->current_chunk_index; i++){
-            v2_mesher_get_faces_and_verts(&graph->chunks[i], &in_faces, &in_vertices, &vertex_hash_table, true);
+        for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
+            if(graph->chunk_hash_table[i] != NULL){
+                v2_mesher_get_faces_and_verts(graph->chunk_hash_table[i], &in_faces, &in_vertices, &vertex_hash_table, true);
+            }
         }
         greedy_mesher_enter_vertices(&in_faces, &in_vertices, &vertex_hash_table);
         if(wavefront_greedy_mesher){
@@ -1845,8 +1855,10 @@ class OnlineMeshMapper : public rclcpp::Node{
  
         std::vector<ChunkMesh_t> chunk_local_meshes;
 
-        for(uint32_t i = 0; i < graph->current_chunk_index; i++){
-            chunk_local_meshes.push_back(gen_chunk_mesh_with_greedy_mesher(&(graph->chunks[i]),true));   
+        for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
+            if(graph->chunk_hash_table[i] != NULL){
+                chunk_local_meshes.push_back(gen_chunk_mesh_with_greedy_mesher((graph->chunk_hash_table[i]),true));   
+            }
         }
         write_mesh_file(&chunk_local_meshes, &vertex_normals);
         io_mutex.unlock();

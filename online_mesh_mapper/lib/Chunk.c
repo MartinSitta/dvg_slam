@@ -211,25 +211,24 @@ void chunk_lookup_and_delete_nodes_helper(Chunk_t* chunk,
 }
 
 
-Chunk_t chunk_init(){
-    Chunk_t output;
-    output.x_offset = 0;
-    output.y_offset = 0;
-    output.z_offset = 0;
-    output.current_node_index = 0;
+Chunk_t* chunk_init(Chunk_t* chunk){
+    chunk->x_offset = 0;
+    chunk->y_offset = 0;
+    chunk->z_offset = 0;
+    chunk->current_node_index = 0;
     for(uint32_t i = 0; i < CHUNK_NODE_LIMIT; i++){
-        output.nodes[i] = graph_node_init();
+        chunk->nodes[i] = graph_node_init();
     }
     for(uint32_t i = 0; i < CHUNK_NODE_HASHTABLE_SIZE; i++){
-        output.node_hash_table[i] = -1;
+        chunk->node_hash_table[i] = -1;
     }
-    assert(output.nodes[0].coord_and_mesh_info.buf[0] == 0);
-    assert(output.nodes[0].coord_and_mesh_info.buf[1] == 0);
-    assert(output.nodes[0].coord_and_mesh_info.buf[2] == 0);
+    assert(chunk->nodes[0].coord_and_mesh_info.buf[0] == 0);
+    assert(chunk->nodes[0].coord_and_mesh_info.buf[1] == 0);
+    assert(chunk->nodes[0].coord_and_mesh_info.buf[2] == 0);
     //assert(output.nodes[0].upper_neighbour == -1);
     //assert(output.nodes[0].back_neighbour == -1);
 
-    return output;
+    return chunk;
 }
 
 void chunk_node_enter_neighbours(Chunk_t* chunk, chunk_node_array_entry_t index){

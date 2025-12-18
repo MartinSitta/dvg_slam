@@ -4,102 +4,79 @@
 #include <stdio.h>
 //helper functions
 void voxel_graph_init_arrays(VoxelGraph_t* graph){
-    assert(graph != NULL);
-    for(uint32_t i = 0; (i < 1<<15) && (i < graph->chunk_amount); i++){
-        graph->chunks[i] = chunk_init();
+    for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
+        graph->chunk_hash_table[i] = NULL;
     }
-    uint32_t ref_val = (uint32_t) 1 << 31;
-    for(uint32_t i = 0; (i < ref_val) && (i < graph->chunk_hash_table_size);i++){
-        graph->chunk_hash_table[i] = -1;
-    }
-    assert(graph->chunks[0].x_offset == 0);
-    assert(graph->chunks[0].y_offset == 0);
-    assert(graph->chunks[0].z_offset == 0);
-    assert(graph->chunks[0].current_node_index == 0);
-    
-    assert(graph->chunks[graph->chunk_amount - 1].x_offset == 0);
-    assert(graph->chunks[graph->chunk_amount - 1].y_offset == 0);
-    assert(graph->chunks[graph->chunk_amount - 1].z_offset == 0);
-    assert(graph->chunks[graph->chunk_amount - 1].current_node_index == 0);
-
-    assert(graph->chunk_hash_table[0] == -1);
-    assert(graph->chunk_hash_table[graph->chunk_hash_table_size - 1] == -1);
 }
 
 //end helpers
-VoxelGraph_t* voxel_graph_init(uint32_t chunk_count)
-{
+VoxelGraph_t* voxel_graph_init(uint32_t chunk_count){
     assert(chunk_count > 0);
     assert((chunk_count & (chunk_count - 1)) == 0);
     uint32_t chunk_amount = chunk_count;
-    uint32_t chunk_hash_table_size = CHUNK_HASH_TABLE_SIZE;
+    uint32_t chunk_hash_table_size = chunk_count * 2;
     VoxelGraph_t* output = malloc(sizeof(VoxelGraph_t));
-    output->chunks = NULL;
+    output->chunk_amount = chunk_count;
+    //output->chunks = NULL;
     output->chunk_hash_table = NULL;
     output->current_chunk_index = 0;
-    for(uint32_t i = 0; i < 31 && output->chunks == NULL; i++){
-        unsigned long int init_size = sizeof(Chunk_t) * chunk_amount;
-        output->chunks = malloc(init_size);
-        if(output->chunks == NULL){
-            chunk_amount = chunk_amount >> 1;
+    if(((chunk_hash_table_size) & (chunk_hash_table_size - 1)) != 0){
+        bool val_found = false;
+        for(uint32_t i = 1; (i < (i << 31)) && !val_found; i << 1){
+            if(i > chunk_hash_table_size){
+                chunk_hash_table_size = i;
+                val_found = true;
+            }
         }
-        else{
-            output->chunk_amount = chunk_amount;
-        }
+
     }
-    assert(output->chunks != NULL);
-    for(uint32_t i = 0; i < 31 && output->chunk_hash_table == NULL; i++){
-        output->chunk_hash_table = malloc(sizeof(uint32_t) * chunk_hash_table_size);
-        if(output->chunk_hash_table == NULL){
-            chunk_hash_table_size = chunk_hash_table_size >> 1;
-        }
-        else{
-            output->chunk_hash_table_size = chunk_hash_table_size;
-        }
-    }
-    printf("chunk amount is %d\n", output->chunk_amount);
-    printf("chunk hashtable size is %d\n", output->chunk_hash_table_size);
+    output->chunk_hash_table = malloc(sizeof(Chunk_t*) * chunk_hash_table_size);
     assert(output->chunk_hash_table != NULL);
+    output->chunk_hash_table_size = chunk_hash_table_size;
+    printf("chunk hashtable size is %d\n", output->chunk_hash_table_size);
     assert(output->chunk_hash_table_size > output->chunk_amount);
     voxel_graph_init_arrays(output);
     return output;
 }
 Vertex_t* voxel_graph_get_vertex(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     assert(graph != NULL);
-    int64_t index = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
-    if(index == -1){
+    Chunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
         return NULL;
     }
-    assert(build_anchor_coord(x) == graph->chunks[index].x_offset);                           
-    assert(build_anchor_coord(y) == graph->chunks[index].y_offset);                           
-    assert(build_anchor_coord(z) == graph->chunks[index].z_offset);
+    assert(build_anchor_coord(x) == chunk->x_offset);                           
+    assert(build_anchor_coord(y) == chunk->y_offset);                           
+    assert(build_anchor_coord(z) == chunk->z_offset);
     
-    int16_t rel_x = x - graph->chunks[index].x_offset;                                        
-    int16_t rel_y = y - graph->chunks[index].y_offset;                                        
-    int16_t rel_z = z - graph->chunks[index].z_offset;                                        
+    int16_t rel_x = x - chunk->x_offset;                                        
+    int16_t rel_y = y - chunk->y_offset;                                        
+    int16_t rel_z = z - chunk->z_offset;                                        
     
     uint16_t node_coords = build_vertex_coords((uint8_t) rel_x, (uint8_t) rel_y, (uint8_t) rel_z);
-    int64_t node_index = chunk_node_lookup(&graph->chunks[index], node_coords);
+    int64_t node_index = chunk_node_lookup(chunk, node_coords);
     if(node_index == -1){
         return NULL;
     }
-    Vertex_t* out_ptr = &graph->chunks[index].nodes[node_index].coord_and_mesh_info;
+    Vertex_t* out_ptr = &chunk->nodes[node_index].coord_and_mesh_info;
     assert(out_ptr->vertex_coords == node_coords);
-    return &graph->chunks[index].nodes[node_index].coord_and_mesh_info;
+    return out_ptr;
 }
 bool voxel_graph_insert(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     assert(graph != NULL);
     //printf("performing hash table lookup\n");
-    int64_t arr_entry = voxel_graph_chunk_hash_table_request(graph, x, y, z);
-    assert(arr_entry < graph->chunk_amount);
-    if(arr_entry < 0){
+    Chunk_t* chunk = voxel_graph_chunk_hash_table_request(graph, x, y, z);
+    if(chunk == NULL){
         return false;
     }
-    assert(graph->chunks[arr_entry].x_offset == build_anchor_coord(x));
-    assert(graph->chunks[arr_entry].y_offset == build_anchor_coord(y));
-    assert(graph->chunks[arr_entry].z_offset == build_anchor_coord(z));
+    assert(graph->current_chunk_index < graph->chunk_amount);
+    if(graph->current_chunk_index < 0){
+        return false;
+    }
+    assert(chunk->x_offset == build_anchor_coord(x));
+    assert(chunk->y_offset == build_anchor_coord(y));
+    assert(chunk->z_offset == build_anchor_coord(z));
     //printf("performing chunk_insertion\n");
-    bool ret_val = chunk_insert(&graph->chunks[arr_entry],x, y, z);
+    bool ret_val = chunk_insert(chunk,x, y, z);
     if(ret_val){
         voxel_graph_enter_neighbours(graph, x, y, z);
     }
@@ -107,20 +84,20 @@ bool voxel_graph_insert(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
 }
 bool voxel_graph_delete(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     assert(graph != NULL);
-    int64_t arr_entry = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
-    if(arr_entry < 0){
+    Chunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
         return false;
     }
-    assert(graph->chunks[arr_entry].x_offset == build_anchor_coord(x));
-    assert(graph->chunks[arr_entry].y_offset == build_anchor_coord(y));
-    assert(graph->chunks[arr_entry].z_offset == build_anchor_coord(z));
-    bool ret_val = chunk_delete(&graph->chunks[arr_entry],x, y, z);
+    assert(chunk->x_offset == build_anchor_coord(x));
+    assert(chunk->y_offset == build_anchor_coord(y));
+    assert(chunk->z_offset == build_anchor_coord(z));
+    bool ret_val = chunk_delete(chunk,x, y, z);
     if(ret_val){
         voxel_graph_delete_neighbours(graph, x, y, z);
     }
     return ret_val;
 }
-int64_t voxel_graph_chunk_hash_table_lookup(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+Chunk_t* voxel_graph_chunk_hash_table_lookup(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     int64_t chunk_anchor_x = build_anchor_coord(x);
     int64_t chunk_anchor_y = build_anchor_coord(y);
     int64_t chunk_anchor_z = build_anchor_coord(z);
@@ -134,22 +111,22 @@ int64_t voxel_graph_chunk_hash_table_lookup(VoxelGraph_t* graph, int64_t x, int6
     //printf("performing double hash hashtable lookups\n");
     for(uint32_t i = 0; i < 10; i++){
         double_hash = ((uint64_t)hash_table_entry + ((i * double_hash_val))) % graph->chunk_hash_table_size;
-        assert(double_hash< graph->chunk_hash_table_size);
-        if(graph->chunk_hash_table[double_hash] == -1){
-            return -1;
+        assert(double_hash < graph->chunk_hash_table_size);
+        if(graph->chunk_hash_table[double_hash] == NULL){
+            return NULL;
         }
         else{
-            int64_t arr_index = graph->chunk_hash_table[double_hash]; 
-            if(graph->chunks[arr_index].x_offset == chunk_anchor_x &&
-                    graph->chunks[arr_index].y_offset == chunk_anchor_y &&
-                    graph->chunks[arr_index].z_offset == chunk_anchor_z){
-                return arr_index;
+            Chunk_t* chunk = graph->chunk_hash_table[double_hash]; 
+            if(chunk->x_offset == chunk_anchor_x &&
+                    chunk->y_offset == chunk_anchor_y &&
+                    chunk->z_offset == chunk_anchor_z){
+                return chunk;
             }
         }
     }
-    return -1;
+    return NULL;
 }
-int64_t voxel_graph_chunk_hash_table_request(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+Chunk_t* voxel_graph_chunk_hash_table_request(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     int64_t chunk_anchor_x = build_anchor_coord(x);
     int64_t chunk_anchor_y = build_anchor_coord(y);
     int64_t chunk_anchor_z = build_anchor_coord(z);
@@ -158,13 +135,13 @@ int64_t voxel_graph_chunk_hash_table_request(VoxelGraph_t* graph, int64_t x, int
     hash_table_entry = hash_table_entry & (graph->chunk_hash_table_size - 1);
     assert(hash_table_entry < graph->chunk_hash_table_size);
     //printf("performing intial hashtable lookup\n");
-    if(graph->chunk_hash_table[hash_table_entry] == -1){
-        int64_t arr_index = voxel_graph_create_chunk(graph, x, y, z);
-        if(arr_index == -1){
-            return -1;
+    if(graph->chunk_hash_table[hash_table_entry] == NULL){
+        Chunk_t* chunk = voxel_graph_create_chunk(graph, x, y, z);
+        if(chunk == NULL){
+            return NULL;
         }
-        graph->chunk_hash_table[hash_table_entry] = arr_index;
-        return arr_index;
+        graph->chunk_hash_table[hash_table_entry] = chunk;
+        return chunk;
     }
     else{
         //printf("building double_hash\n");
@@ -173,42 +150,45 @@ int64_t voxel_graph_chunk_hash_table_request(VoxelGraph_t* graph, int64_t x, int
         //printf("performing double hash hashtable lookups\n");
         for(uint32_t i = 0; i < 10; i++){
             double_hash = ((uint64_t)hash_table_entry + ((i * double_hash_val))) % graph->chunk_hash_table_size;
-            if(graph->chunk_hash_table[double_hash] == -1){
-                int64_t arr_index = voxel_graph_create_chunk(graph, x, y, z);
-                if(arr_index == -1){
-                    return -1;
+            if(graph->chunk_hash_table[double_hash] == NULL){
+                Chunk_t* chunk = voxel_graph_create_chunk(graph, x, y, z);
+                if(chunk == NULL){
+                    return NULL;
                 }
-                graph->chunk_hash_table[double_hash] = arr_index;
-                return arr_index;
+                graph->chunk_hash_table[double_hash] = chunk;
+                return chunk;
             }
             else{
-                int64_t arr_index = graph->chunk_hash_table[double_hash]; 
-                if(graph->chunks[arr_index].x_offset == chunk_anchor_x &&
-                        graph->chunks[arr_index].y_offset == chunk_anchor_y &&
-                        graph->chunks[arr_index].z_offset == chunk_anchor_z){
-                    return arr_index;
+                Chunk_t* chunk = graph->chunk_hash_table[double_hash]; 
+                if(chunk->x_offset == chunk_anchor_x &&
+                        chunk->y_offset == chunk_anchor_y &&
+                        chunk->z_offset == chunk_anchor_z){
+                    return chunk;
                 }
             }
         }
         
-    return -1;
+    return NULL;
     }
 }
-int64_t voxel_graph_create_chunk(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+Chunk_t* voxel_graph_create_chunk(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     assert(graph != NULL);
     if(graph == NULL){
-        return -1;
+        return NULL;
     }
     if(graph->current_chunk_index >= graph->chunk_amount){
-        return -1;
+        return NULL;
     }
-    int64_t return_index = graph->current_chunk_index;
-    graph->chunks[return_index] = chunk_init();
-    graph->chunks[return_index].x_offset = build_anchor_coord(x);
-    graph->chunks[return_index].y_offset = build_anchor_coord(y);
-    graph->chunks[return_index].z_offset = build_anchor_coord(z);
+    Chunk_t* chunk = malloc(sizeof(Chunk_t));
+    if(chunk == NULL){
+        return NULL;
+    }
+    chunk_init(chunk);
+    chunk->x_offset = build_anchor_coord(x);
+    chunk->y_offset = build_anchor_coord(y);
+    chunk->z_offset = build_anchor_coord(z);
     graph->current_chunk_index++;
-    return return_index;
+    return chunk;
 }
 
 void voxel_graph_enter_neighbours(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
@@ -309,9 +289,15 @@ void voxel_graph_delete_neighbours(VoxelGraph_t* graph, int64_t x, int64_t y, in
 }
 
 void voxel_graph_free(VoxelGraph_t** graph){
-    free((*graph)->chunks);
+    for(uint32_t i = 0; i < (*graph)->chunk_hash_table_size; i++){
+        if((*graph)->chunk_hash_table[i] != NULL){
+            free((*graph)->chunk_hash_table[i]);
+            (*graph)->chunk_hash_table[i] = NULL;
+        }
+    }
     free((*graph)->chunk_hash_table);
     free(*graph);
+    *graph = NULL;
 }
 
 
