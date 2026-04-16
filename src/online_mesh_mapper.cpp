@@ -214,6 +214,7 @@ class OnlineMeshMapper : public rclcpp::Node{
             write_global_wavefront(graph); 
         }
         RCLCPP_WARN(this->get_logger(), "Deleting the map model\n");
+        RCLCPP_WARN(this->get_logger(), "Out of %ld hashtable entries, there were %ld hash collisions\n", graph->total_hash_table_insertions, graph->total_hash_collisions);
         voxel_graph_free(&graph);
     }
   private:
@@ -2119,7 +2120,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         }
         const auto end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        RCLCPP_INFO(this->get_logger(), "rendering the mesh took %ld ms", diff.count());
+        RCLCPP_INFO(this->get_logger(), "generating the mesh took %ld ms", diff.count());
         io_mutex.unlock();
     }
     VoxelGraph_t* graph;
@@ -2288,28 +2289,100 @@ class OnlineMeshMapper : public rclcpp::Node{
         }
         io_mutex.unlock();                                                    
     }
+    pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud(geometry_msgs::msg::Point map_pose, double radius){
+        pcl::PointCloud<pcl::PointXYZ> output;
+        int64_t converted_radius = radius * (float)scalar;
+        int64_t hor_chunk_radius = converted_radius / ALT_CHUNK_LEN;
+        int64_t vert_chunk_radius = converted_radius / ALT_CHUNK_LEN;
+        int64_t x_neg_target = global_point.x - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_pos_target = global_point.x + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_neg_target = global_point.y - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_pos_target = global_point.y + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_neg_target = global_point.z - vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_pos_target = global_point.z + vert_chunk_radius * ALT_CHUNK_LEN;
+        std::vector<AltChunk_t*> chunk_ptrs;
+        for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
+            for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
+                for(int64_t z = z_neg_target; z <= z_pos_target; z += ALT_CHUNK_LEN){
+                    AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+                    if(chunk != NULL){
+                        chunk_ptrs.push_back(chunk);
+                    }
+                }
+            }
+        }
+        for(int64_t cnt = 0; cnt < chunk_ptrs.size(); cnt++){
+            add_to_pcl_cloud(&output, chunk_ptrs.at(cnt));
+        }
+        return output
+    }
+    void add_to_pcl_cloud(pcl::PointCloud<pcl::PointXYZ>* input, AltChunk_t* chunk){
+        int64_t base_x = chunk->x_offset;
+        int64_t base_y = chunk->y_offset;
+        int64_t base_z = chunk->z_offset;
+        for(int64_t moving_x = 0; moving_x < 16; moving_x++){
+            for(int64_t moving_y = 0; moving_y < 16; moving_y++){
+                for(int64_t moving_z = 0; moving_z < 16; moving_z++){
+                    int64_t total_x = base_x + moving_x;
+                    int64_t total_y = base_y + moving_y;
+                    int64_t total_z = base_z + moving_z;
+                    bool up_neighbor = true;
+                    bool down_neighbor = true;
+                    bool left_neighbor = true;
+                    bool right_neighbor = true;
+                    bool foward_neighbor = true;
+                    bool back_neighbor = true;
+                    if(!alt_chunk_lookup(chunk, total_x, total_y, total_z)){
+                        continue;
+                    }
+                    else{
+                        input->push_back(pcl::PointXYZ((float)total_x / (float) scalar, (float)total_y / (float) scalar, (float)total_z, / (float) scalar));
+                    }
+                }
+            }
+        }
+
+    }
     void octomap_bin_callback(const octomap_msgs::msg::Octomap::SharedPtr msg){
         io_mutex.lock();
+        const auto start = std::chrono::steady_clock::now();
         octomap::OcTree* octree = dynamic_cast<octomap::OcTree*>(octomap_msgs::binaryMsgToMap(*msg));
         if (!octree) {
             RCLCPP_WARN(get_logger(), "Failed to convert Octomap message to tree");
             io_mutex.unlock();
             return;
         }
-
+        double radius = 10.0;
+        pcl::Pointcloud<pcl::PointXYZ> input_cloud;
+        pcl::Pointcloud<pcl::PointXYZ> map_cloud = get_local_point_cloud(global_point, radius);
         octree->updateInnerOccupancy();
         for(auto it = octree->begin_leafs(); it != octree->end_leafs(); ++it){
-            int64_t x = it.getX() * (float)scalar;
-            int64_t y = it.getY() * (float)scalar;
-            int64_t z = it.getZ() * (float)scalar;
-            if(octree->isNodeOccupied(*it)){
-                voxel_graph_insert(graph, x, y, z);
-            }
-            else{
-                voxel_graph_delete(graph, x, y, z);
-            }
+            int64_t x = it.getX();
+            int64_t y = it.getY();
+            int64_t z = it.getZ();
+            input_cloud.push_back(pcl::PointXYZ(x, y, z));
         }
         delete octree;
+        if(input_cloud.empty()){
+            RCLCPP_ERROR(this->get_logger(), "input octomap empty!");
+            io_mutex.unlock();
+            return;
+        }
+        if(map_cloud.empty()){
+            for (const auto &p : input_cloud.points) { 
+                voxel_graph_insert(graph, p.x * (float) scalar, p.y * (float) scalar, p.z * (float) scalar);
+            }
+            const auto end = std::chrono::steady_clock::now();
+            auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+            RCLCPP_INFO(this->get_logger(), "entering the octomap took %ld ns", diff.count());
+            return;
+        }
+        pcl::Pointcloud<pcl::PointXYZ> corrected_cloud;
+        Eigen::Matrix4f corrective_transform;
+        run_icp(input_cloud, map_cloud, global_point, &corrected_cloud, &corrective_transform);
+        const auto end = std::chrono::steady_clock::now();
+        auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        RCLCPP_INFO(this->get_logger(), "entering the octomap took %ld ns", diff.count());
         io_mutex.unlock();
     }
 };
