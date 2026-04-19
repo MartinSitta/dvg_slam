@@ -2233,6 +2233,53 @@ class OnlineMeshMapper : public rclcpp::Node{
         //this code assumes little endian and x, y, z formatting
 
         io_mutex.lock();
+        const auto start = std::chrono::steady_clock::now();
+        pcl::PointCloud<pcl::PointXYZ> input_cloud;
+        pcl::fromROSMsg(*msg, input_cloud);
+        //TODO: I HAVE TO TRANSFORM THIS POINTCLOUD FROM THE FRAME ID OF THE MSG
+        //TO GLOBAL POSE THEN I HAVE TO DO ICP
+        //THIS SHOULD LOOK LIKE: TRANSFORM FROM MSG FRAME TO ODOM AND THEN APPLY
+        //THE INTERNAL TRANSFORM FROM ODOM TO GLOBAL POSE
+        double radius = 10.0;
+        pcl::PointCloud<pcl::PointXYZ> map_cloud = get_local_pointcloud(global_point, radius);
+        if(map_cloud.empty()){
+            for (const auto &p : input_cloud.points) { 
+                voxel_graph_insert(graph, p.x, p.y, p.z);
+            }
+            const auto end = std::chrono::steady_clock::now();
+            auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+            RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %ld ns", diff.count());
+            io_mutex.unlock();
+            return;
+        }
+        pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
+        Eigen::Matrix4f corrective_transform;
+        bool converged = run_icp(input_cloud, map_cloud, &corrected_cloud, &corrective_transform);
+        if(!converged){
+            RCLCPP_ERROR(this->get_logger(), "Error in insertion of the pointcloud! Localization required!");
+            io_mutex.unlock();
+            return;
+        }
+        for(const auto &p : corrected_cloud.points){
+            int64_t x_point = p.x;
+            int64_t y_point = p.y;
+            int64_t z_point = p.z;
+            voxel_graph_insert(graph, x_point, y_point, z_point);
+        }
+        Eigen::Vector4f prev_pose(
+                global_point.x,
+                global_point.y,
+                global_point.z, 1.0f);
+        Eigen::Vector4f corrected_pose = corrective_transform * prev_pose;
+        global_point.x = corrected_pose.x();
+        global_point.y = corrected_pose.y();
+        global_point.z = corrected_pose.z();
+        const auto end = std::chrono::steady_clock::now();
+        auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+        RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %ld ns", diff.count());
+        io_mutex.unlock();
+
+        /*
         int64_t point_count = msg->height * msg->width;
         size_t size_of_each_point = msg->point_step;
         const auto start = std::chrono::steady_clock::now();
@@ -2279,6 +2326,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         const auto end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         RCLCPP_INFO(this->get_logger(), "entering %ld graph points took %ld ms", added_points ,diff.count());
+        */
         io_mutex.unlock();
     }
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg){                                                                           
@@ -2287,9 +2335,9 @@ class OnlineMeshMapper : public rclcpp::Node{
         prev_odom_msg_pose.x = current_odom_msg_pose.x;
         prev_odom_msg_pose.y = current_odom_msg_pose.y;
         prev_odom_msg_pose.z = current_odom_msg_pose.z;
-        current_odom_msg_pose.x = msg->pose.x;
-        current_odom_msg_pose.y = msg->pose.y;
-        current_odom_msg_pose.z = msg->pose.z;
+        current_odom_msg_pose.x = msg->pose.pose.position.x;
+        current_odom_msg_pose.y = msg->pose.pose.position.y;
+        current_odom_msg_pose.z = msg->pose.pose.position.z;
         global_point.x = current_odom_msg_pose.x - prev_odom_msg_pose.x;
         global_point.y = current_odom_msg_pose.y - prev_odom_msg_pose.y;
         global_point.z = current_odom_msg_pose.z - prev_odom_msg_pose.z;
@@ -2342,6 +2390,9 @@ class OnlineMeshMapper : public rclcpp::Node{
                 }
             }
         }
+        if(chunk_ptrs.empty()){
+            return output;
+        }
         for(int64_t cnt = 0; cnt < chunk_ptrs.size(); cnt++){
             add_to_pcl_cloud(&output, chunk_ptrs.at(cnt));
         }
@@ -2361,7 +2412,7 @@ class OnlineMeshMapper : public rclcpp::Node{
                         continue;
                     }
                     else{
-                        input->push_back(pcl::PointXYZ((float)total_x / (float) scalar, (float)total_y / (float) scalar, (float)total_z / (float) scalar));
+                        input->push_back(pcl::PointXYZ(total_x, total_y, total_z));
                     }
                 }
             }
@@ -2376,23 +2427,27 @@ class OnlineMeshMapper : public rclcpp::Node{
         pcl::PointCloud<pcl::PointXYZ>::Ptr target(new pcl::PointCloud<pcl::PointXYZ>(map_cloud));
         
         pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-        icp.setMaxCorrespondenceDistance(2.0 / (double)scalar);
+        icp.setMaxCorrespondenceDistance(scalar / 2);
         icp.setTransformationEpsilon(1e-8);//stop iterating when transform delta below
         icp.setEuclideanFitnessEpsilon(1e-6);//stop iterating when mean squared error below
         icp.setMaximumIterations(50);
         icp.setInputSource(source);
-        icp.setInputSource(target);
+        icp.setInputTarget(target);
+
+        Eigen::Translation3f trans(global_point.x * scalar, global_point.y * scalar, global_point.z * scalar);
+        Eigen::Affine3f init_affine(trans);
+        Eigen::Matrix4f initial_guess = init_affine.matrix();
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr aligned(new pcl::PointCloud<pcl::PointXYZ>);
-        icp.align(*aligned);
+        icp.align(*aligned, initial_guess);
         
         if(!icp.hasConverged()){
             RCLCPP_ERROR(this->get_logger(), "ICP did not converge!");
             return false;
         }
 
-        double fitness = icp.getFitnessScore();
-        double fitness_threshold = 0.1 / (double) scalar;
+        double fitness = icp.getFitnessScore(2.0f);
+        double fitness_threshold = 1.0f / (float)(scalar / 3);
         if(fitness > fitness_threshold){
             RCLCPP_ERROR(this->get_logger(), "ICP fitness score is too bad: %f", fitness);
             return false;
@@ -2416,10 +2471,16 @@ class OnlineMeshMapper : public rclcpp::Node{
         octree->updateInnerOccupancy();
         for(auto it = octree->begin_leafs(); it != octree->end_leafs(); ++it){
             if(octree->isNodeOccupied(*it)){
-                int64_t x = it.getX();
-                int64_t y = it.getY();
-                int64_t z = it.getZ();
+                double x = it.getX() * (float)scalar;
+                double y = it.getY() * (float)scalar;
+                double z = it.getZ() * (float)scalar;
                 input_cloud.push_back(pcl::PointXYZ(x, y, z));
+            }
+            else{
+                int64_t x = it.getX() * (float)scalar;
+                int64_t y = it.getY() * (float)scalar;
+                int64_t z = it.getY() * (float)scalar;
+                voxel_graph_delete(graph, x, y, z);
             }
         }
         delete octree;
@@ -2430,7 +2491,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         }
         if(map_cloud.empty()){
             for (const auto &p : input_cloud.points) { 
-                voxel_graph_insert(graph, p.x * (float) scalar, p.y * (float) scalar, p.z * (float) scalar);
+                voxel_graph_insert(graph, p.x, p.y, p.z);
             }
             const auto end = std::chrono::steady_clock::now();
             auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
@@ -2447,9 +2508,9 @@ class OnlineMeshMapper : public rclcpp::Node{
             return;
         }
         for(const auto &p : corrected_cloud.points){
-            int64_t x_point = p.x * (float) scalar;
-            int64_t y_point = p.y * (float) scalar;
-            int64_t z_point = p.z * (float) scalar;
+            int64_t x_point = p.x;
+            int64_t y_point = p.y;
+            int64_t z_point = p.z;
             voxel_graph_insert(graph, x_point, y_point, z_point);
         }
         Eigen::Vector4f prev_pose(
