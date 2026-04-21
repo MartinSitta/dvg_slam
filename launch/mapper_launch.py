@@ -10,7 +10,7 @@ def generate_launch_description():
             executable='online_mesh_mapper',
             name='online_mesh_mapper',
             parameters=[{
-                'in_topic': '/Spot/Velodyne_Puck/point_cloud', #input topic of type pointcloud_2
+                'in_topic': '',#/Spot/Velodyne_Puck/point_cloud', #input topic of type pointcloud_2
                 'in_del_topic': '', #input topic of type pointcloud2
                 'frame_id': 'map', #frame id of the input chosen input
                 'odometry_msg_topic': '/Spot/odometry', #topic that outputs nav_msgs_msg_odometry
