@@ -17,7 +17,7 @@ def generate_launch_description():
                 'octomap_binary_topic' : '/octomap_binary', #input topic of type octomap
                 #(octomap_binary)
                 'scalar': 10,
-                'render_distance_horizontal':10,
+                'render_distance_horizontal':3,
                 'render_distance_vertical':3,
                 'out_topic':'/navigation/mesh_map',
                 'max_chunks':1<<14,#this HAS to be a power of 2

@@ -20,6 +20,7 @@
 #include <tf2/convert.h>
 #include <tf2/transform_datatypes.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <pcl/conversions.h>
@@ -192,13 +193,24 @@ class OnlineMeshMapper : public rclcpp::Node{
                     std::bind(&OnlineMeshMapper::octomap_bin_callback,
                     this, _1));
         }
-        
-        current_odom_msg_pose.x = 0;
-        current_odom_msg_pose.y = 0;
-        current_odom_msg_pose.z = 0;
-        prev_odom_msg_pose.x = 0;
-        prev_odom_msg_pose.y = 0;
-        prev_odom_msg_pose.z = 0;
+        publisher_two = this->create_publisher<nav_msgs::msg::Odometry>("debug_map_pose", 1);
+        timer_two = this->create_wall_timer(
+        1000ms, std::bind(&OnlineMeshMapper::debug_map_pose_callback, this));
+        current_odom_msg_pose.position.x = 0;
+        current_odom_msg_pose.position.y = 0;
+        current_odom_msg_pose.position.z = 0;
+        current_odom_msg_pose.orientation.x = 0;
+        current_odom_msg_pose.orientation.y = 0;
+        current_odom_msg_pose.orientation.z = 0;
+        current_odom_msg_pose.orientation.w = 1;
+        prev_odom_msg_pose.position.x = 0;
+        prev_odom_msg_pose.position.y = 0;
+        prev_odom_msg_pose.position.z = 0;
+        prev_odom_msg_pose.orientation.x = 0;
+        prev_odom_msg_pose.orientation.y = 0;
+        prev_odom_msg_pose.orientation.z = 0;
+        prev_odom_msg_pose.orientation.w = 1;
+        last_processed_octomap_msg = std::chrono::steady_clock::now();
         RCLCPP_INFO(this->get_logger(), "starting the mapper\n");
         graph = voxel_graph_init(this->chunk_amount);
         RCLCPP_INFO(this->get_logger(), "node initialized\n");
@@ -224,7 +236,13 @@ class OnlineMeshMapper : public rclcpp::Node{
         voxel_graph_free(&graph);
     }
   private:
-
+        void debug_map_pose_callback(){
+            nav_msgs::msg::Odometry out_msg;
+            out_msg.pose.pose = global_point;
+            out_msg.child_frame_id = "base_link";
+            out_msg.header.frame_id = "odom";
+            publisher_two->publish(out_msg);
+        }
         void raycast_inverse_delete(int64_t org_x, int64_t org_y,
             int64_t org_z, int64_t dest_x, int64_t dest_y, int64_t dest_z,
             std::vector<DelPoint_t>* points){
@@ -1768,12 +1786,12 @@ class OnlineMeshMapper : public rclcpp::Node{
         OutVertex_t back_normal = {-1.0f, 0.0f, 0.0f};
         vertex_normals.push_back(back_normal);
 
-        int64_t x_neg_target = (global_point.x * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t x_pos_target = (global_point.x * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t y_neg_target = (global_point.y * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t y_pos_target = (global_point.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t z_neg_target = (global_point.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
-        int64_t z_pos_target = (global_point.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_neg_target = (global_point.position.x * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_pos_target = (global_point.position.x * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_neg_target = (global_point.position.y * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_pos_target = (global_point.position.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_neg_target = (global_point.position.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_pos_target = (global_point.position.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
         std::vector<AltChunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
@@ -1820,12 +1838,12 @@ class OnlineMeshMapper : public rclcpp::Node{
         OutVertex_t back_normal = {-1.0f, 0.0f, 0.0f};
         vertex_normals.push_back(back_normal);
 
-        int64_t x_neg_target = (global_point.x * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t x_pos_target = (global_point.x * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t y_neg_target = (global_point.y * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t y_pos_target = (global_point.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t z_neg_target = (global_point.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
-        int64_t z_pos_target = (global_point.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_neg_target = (global_point.position.x * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_pos_target = (global_point.position.x * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_neg_target = (global_point.position.y * scalar) - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_pos_target = (global_point.position.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_neg_target = (global_point.position.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_pos_target = (global_point.position.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
         std::vector<AltChunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
@@ -2140,16 +2158,18 @@ class OnlineMeshMapper : public rclcpp::Node{
     uint32_t scalar;
     std::string obj_filepath;
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr timer_two;
     rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr publisher_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr publisher_two;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_two; 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_three;
     rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_binary_subscription;
     size_t count_;
     std::mutex io_mutex;
-    geometry_msgs::msg::Point global_point;
-    geometry_msgs::msg::Point current_odom_msg_pose;
-    geometry_msgs::msg::Point prev_odom_msg_pose;
+    geometry_msgs::msg::Pose global_point;
+    geometry_msgs::msg::Pose current_odom_msg_pose;
+    geometry_msgs::msg::Pose prev_odom_msg_pose;
     std::shared_ptr<rclcpp::Clock> clock_;
    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -2162,7 +2182,7 @@ class OnlineMeshMapper : public rclcpp::Node{
     int64_t prev_x = 0;
     int64_t prev_y = 0;
     int64_t prev_z = 0;
-
+    std::chrono::steady_clock::time_point last_processed_octomap_msg;
     void del_point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {        
         //this code assumes little endian and x, y, z formatting
@@ -2208,8 +2228,8 @@ class OnlineMeshMapper : public rclcpp::Node{
             prev_z = input_values[2];
             //debug_var = voxel_graph_delete(graph, (int64_t) input_values[0], (int64_t) input_values[1], (int64_t) input_values[2]);
             
-            if(input_values[2] > global_point.z - 0.5 * (float)scalar){
-                raycast_inverse_delete(global_point.x, global_point.y, global_point.z, input_values[0], input_values[1], input_values[2], &points_to_be_deleted);
+            if(input_values[2] > global_point.position.z - 0.5 * (float)scalar){
+                raycast_inverse_delete(global_point.position.x, global_point.position.y, global_point.position.z, input_values[0], input_values[1], input_values[2], &points_to_be_deleted);
                 //debug_var = voxel_graph_delete(graph, (int64_t) input_values[0], (int64_t) input_values[1], (int64_t) input_values[2]);
             }/*
             else{ //if(input_values[2] > global_point.z - 0.5 * (float)scalar){
@@ -2234,8 +2254,41 @@ class OnlineMeshMapper : public rclcpp::Node{
 
         io_mutex.lock();
         const auto start = std::chrono::steady_clock::now();
+        sensor_msgs::msg::PointCloud2 transformed_cloud;
+        try{
+            auto tf = tf_buffer_->lookupTransform(
+                    "base_link",
+                    msg->header.frame_id,
+                    msg->header.stamp,
+                    rclcpp::Duration::from_seconds(0.1));
+            tf2::doTransform(*msg, transformed_cloud, tf);
+        }
+        catch(const tf2::TransformException& ex){
+            RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
+            return;
+        }
+        pcl::PointCloud<pcl::PointXYZ> raw_cloud;
+        pcl::fromROSMsg(transformed_cloud, raw_cloud);
+         Eigen::Quaternionf q(
+                global_point.orientation.w,
+                global_point.orientation.x,
+                global_point.orientation.y,
+                global_point.orientation.z);
+
+        Eigen::Vector3f t(
+                global_point.position.x,
+                global_point.position.y,
+                global_point.position.z);
+        Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+        transform.translate(t);
+        transform.rotate(q);
         pcl::PointCloud<pcl::PointXYZ> input_cloud;
-        pcl::fromROSMsg(*msg, input_cloud);
+        pcl::transformPointCloud(raw_cloud, input_cloud, transform);
+        for(auto &p : input_cloud.points){
+            p.x = (int64_t) (p.x * (float)scalar);
+            p.y = (int64_t) (p.y * (float)scalar);
+            p.z = (int64_t) (p.z * (float)scalar);
+        }
         //TODO: I HAVE TO TRANSFORM THIS POINTCLOUD FROM THE FRAME ID OF THE MSG
         //TO GLOBAL POSE THEN I HAVE TO DO ICP
         //THIS SHOULD LOOK LIKE: TRANSFORM FROM MSG FRAME TO ODOM AND THEN APPLY
@@ -2267,13 +2320,13 @@ class OnlineMeshMapper : public rclcpp::Node{
             voxel_graph_insert(graph, x_point, y_point, z_point);
         }
         Eigen::Vector4f prev_pose(
-                global_point.x,
-                global_point.y,
-                global_point.z, 1.0f);
+                global_point.position.x,
+                global_point.position.y,
+                global_point.position.z, 1.0f);
         Eigen::Vector4f corrected_pose = corrective_transform * prev_pose;
-        global_point.x = corrected_pose.x();
-        global_point.y = corrected_pose.y();
-        global_point.z = corrected_pose.z();
+        global_point.position.x = corrected_pose.x();
+        global_point.position.y = corrected_pose.y();
+        global_point.position.z = corrected_pose.z();
         const auto end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
         RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %ld ns", diff.count());
@@ -2326,21 +2379,37 @@ class OnlineMeshMapper : public rclcpp::Node{
         const auto end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
         RCLCPP_INFO(this->get_logger(), "entering %ld graph points took %ld ms", added_points ,diff.count());
-        */
         io_mutex.unlock();
+        */
     }
     void odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg){                                                                           
         io_mutex.lock();
-        geometry_msgs::msg::TransformStamped transform_stamped;
-        prev_odom_msg_pose.x = current_odom_msg_pose.x;
-        prev_odom_msg_pose.y = current_odom_msg_pose.y;
-        prev_odom_msg_pose.z = current_odom_msg_pose.z;
-        current_odom_msg_pose.x = msg->pose.pose.position.x;
-        current_odom_msg_pose.y = msg->pose.pose.position.y;
-        current_odom_msg_pose.z = msg->pose.pose.position.z;
-        global_point.x = current_odom_msg_pose.x - prev_odom_msg_pose.x;
-        global_point.y = current_odom_msg_pose.y - prev_odom_msg_pose.y;
-        global_point.z = current_odom_msg_pose.z - prev_odom_msg_pose.z;
+        prev_odom_msg_pose = current_odom_msg_pose;
+        current_odom_msg_pose.position = msg->pose.pose.position;
+        current_odom_msg_pose.orientation = msg->pose.pose.orientation;
+        global_point.position.x = current_odom_msg_pose.position.x - prev_odom_msg_pose.position.x;
+        global_point.position.y = current_odom_msg_pose.position.y - prev_odom_msg_pose.position.y;
+        global_point.position.z = current_odom_msg_pose.position.z - prev_odom_msg_pose.position.z;
+        
+        Eigen::Quaternionf q_prev(
+                prev_odom_msg_pose.orientation.w,
+                prev_odom_msg_pose.orientation.x,
+                prev_odom_msg_pose.orientation.y,
+                prev_odom_msg_pose.orientation.z);
+        Eigen::Quaternionf q_current(
+                prev_odom_msg_pose.orientation.w,
+                prev_odom_msg_pose.orientation.x,
+                prev_odom_msg_pose.orientation.y,
+                prev_odom_msg_pose.orientation.z);
+        Eigen::Quaternionf q_delta = q_current * q_prev.inverse();
+        q_delta.normalize();
+
+        global_point.orientation.x = q_delta.x();
+        global_point.orientation.y = q_delta.y();
+        global_point.orientation.z = q_delta.z();
+        global_point.orientation.w = q_delta.w();
+
+        io_mutex.unlock();
         /*
         try{
             transform_stamped = tf_buffer_->lookupTransform(frame_id, "odom", tf2::TimePointZero);
@@ -2366,19 +2435,18 @@ class OnlineMeshMapper : public rclcpp::Node{
             RCLCPP_WARN(this->get_logger(), "Transform error: %s", ex.what());
         }
         */
-        io_mutex.unlock();                                                    
     }
-    pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud(geometry_msgs::msg::Point map_pose, double radius){
+    pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud(geometry_msgs::msg::Pose map_pose, double radius){
         pcl::PointCloud<pcl::PointXYZ> output;
         int64_t converted_radius = radius * (float)scalar;
         int64_t hor_chunk_radius = converted_radius / ALT_CHUNK_LEN;
         int64_t vert_chunk_radius = converted_radius / ALT_CHUNK_LEN;
-        int64_t x_neg_target = map_pose.x - hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t x_pos_target = map_pose.x + hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t y_neg_target = map_pose.y - hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t y_pos_target = map_pose.y + hor_chunk_radius * ALT_CHUNK_LEN;
-        int64_t z_neg_target = map_pose.z - vert_chunk_radius * ALT_CHUNK_LEN;
-        int64_t z_pos_target = map_pose.z + vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_neg_target = map_pose.position.x - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t x_pos_target = map_pose.position.x + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_neg_target = map_pose.position.y - hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t y_pos_target = map_pose.position.y + hor_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_neg_target = map_pose.position.z - vert_chunk_radius * ALT_CHUNK_LEN;
+        int64_t z_pos_target = map_pose.position.z + vert_chunk_radius * ALT_CHUNK_LEN;
         std::vector<AltChunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
@@ -2433,9 +2501,14 @@ class OnlineMeshMapper : public rclcpp::Node{
         icp.setMaximumIterations(50);
         icp.setInputSource(source);
         icp.setInputTarget(target);
-
-        Eigen::Translation3f trans(global_point.x * scalar, global_point.y * scalar, global_point.z * scalar);
-        Eigen::Affine3f init_affine(trans);
+        
+        Eigen::Quaternionf q(
+                global_point.orientation.w,
+                global_point.orientation.x,
+                global_point.orientation.y,
+                global_point.orientation.z);
+        Eigen::Translation3f trans(global_point.position.x * scalar, global_point.position.y * scalar, global_point.position.z * scalar);
+        Eigen::Affine3f init_affine = trans * q;
         Eigen::Matrix4f initial_guess = init_affine.matrix();
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr aligned(new pcl::PointCloud<pcl::PointXYZ>);
@@ -2459,6 +2532,12 @@ class OnlineMeshMapper : public rclcpp::Node{
     void octomap_bin_callback(const octomap_msgs::msg::Octomap::SharedPtr msg){
         io_mutex.lock();
         const auto start = std::chrono::steady_clock::now();
+        auto time_since_last_processed_octomap = std::chrono::duration_cast<std::chrono::milliseconds>(start - last_processed_octomap_msg);
+        if(time_since_last_processed_octomap < std::chrono::milliseconds{1000}){
+            io_mutex.unlock();
+            return;
+        }
+        last_processed_octomap_msg = start;
         octomap::OcTree* octree = dynamic_cast<octomap::OcTree*>(octomap_msgs::binaryMsgToMap(*msg));
         if (!octree) {
             RCLCPP_WARN(get_logger(), "Failed to convert Octomap message to tree");
@@ -2471,9 +2550,9 @@ class OnlineMeshMapper : public rclcpp::Node{
         octree->updateInnerOccupancy();
         for(auto it = octree->begin_leafs(); it != octree->end_leafs(); ++it){
             if(octree->isNodeOccupied(*it)){
-                double x = it.getX() * (float)scalar;
-                double y = it.getY() * (float)scalar;
-                double z = it.getZ() * (float)scalar;
+                int64_t x = it.getX() * (float)scalar;
+                int64_t y = it.getY() * (float)scalar;
+                int64_t z = it.getZ() * (float)scalar;
                 input_cloud.push_back(pcl::PointXYZ(x, y, z));
             }
             else{
@@ -2513,14 +2592,29 @@ class OnlineMeshMapper : public rclcpp::Node{
             int64_t z_point = p.z;
             voxel_graph_insert(graph, x_point, y_point, z_point);
         }
-        Eigen::Vector4f prev_pose(
-                global_point.x,
-                global_point.y,
-                global_point.z, 1.0f);
-        Eigen::Vector4f corrected_pose = corrective_transform * prev_pose;
-        global_point.x = corrected_pose.x();
-        global_point.y = corrected_pose.y();
-        global_point.z = corrected_pose.z();
+        Eigen::Vector4f prev_pose_vector(
+                global_point.position.x * (float) scalar,
+                global_point.position.y * (float) scalar,
+                global_point.position.z * (float) scalar, 1.0f);
+        Eigen::Vector4f corrected_pose = corrective_transform * prev_pose_vector;
+        global_point.position.x = corrected_pose.x() / (float) scalar;
+        global_point.position.y = corrected_pose.y() / (float) scalar;
+        global_point.position.z = corrected_pose.z() / (float) scalar;
+
+        Eigen::Matrix3f rotation = corrective_transform.block<3,3>(0,0);
+        Eigen::Quaternionf q_correction(rotation);
+        Eigen::Quaternionf q_current(
+                global_point.orientation.w,
+                global_point.orientation.x,
+                global_point.orientation.y,
+                global_point.orientation.z);
+        Eigen::Quaternionf q_corrected = (q_correction * q_current).normalized();
+        global_point.orientation.x = q_corrected.x();
+        global_point.orientation.y = q_corrected.y();
+        global_point.orientation.z = q_corrected.z();
+        global_point.orientation.w = q_corrected.w();
+
+
         const auto end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
         RCLCPP_INFO(this->get_logger(), "entering the octomap took %ld ns", diff.count());
