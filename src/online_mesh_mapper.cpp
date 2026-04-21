@@ -2387,9 +2387,9 @@ class OnlineMeshMapper : public rclcpp::Node{
         prev_odom_msg_pose = current_odom_msg_pose;
         current_odom_msg_pose.position = msg->pose.pose.position;
         current_odom_msg_pose.orientation = msg->pose.pose.orientation;
-        global_point.position.x = current_odom_msg_pose.position.x - prev_odom_msg_pose.position.x;
-        global_point.position.y = current_odom_msg_pose.position.y - prev_odom_msg_pose.position.y;
-        global_point.position.z = current_odom_msg_pose.position.z - prev_odom_msg_pose.position.z;
+        global_point.position.x += current_odom_msg_pose.position.x - prev_odom_msg_pose.position.x;
+        global_point.position.y += current_odom_msg_pose.position.y - prev_odom_msg_pose.position.y;
+        global_point.position.z += current_odom_msg_pose.position.z - prev_odom_msg_pose.position.z;
         
         Eigen::Quaternionf q_prev(
                 prev_odom_msg_pose.orientation.w,
@@ -2593,9 +2593,9 @@ class OnlineMeshMapper : public rclcpp::Node{
             voxel_graph_insert(graph, x_point, y_point, z_point);
         }
         Eigen::Vector4f prev_pose_vector(
-                global_point.position.x * (float) scalar,
-                global_point.position.y * (float) scalar,
-                global_point.position.z * (float) scalar, 1.0f);
+                global_point.position.x * (float)scalar,
+                global_point.position.y * (float)scalar,
+                global_point.position.z * (float)scalar, 1.0f);
         Eigen::Vector4f corrected_pose = corrective_transform * prev_pose_vector;
         global_point.position.x = corrected_pose.x() / (float) scalar;
         global_point.position.y = corrected_pose.y() / (float) scalar;
