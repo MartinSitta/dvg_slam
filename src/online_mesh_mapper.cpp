@@ -196,7 +196,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         }
         publisher_two = this->create_publisher<nav_msgs::msg::Odometry>("debug_map_pose", 1);
         timer_two = this->create_wall_timer(
-        1000ms, std::bind(&OnlineMeshMapper::debug_map_pose_callback, this));
+        10ms, std::bind(&OnlineMeshMapper::debug_map_pose_callback, this));
         current_odom_msg_pose.position.x = 0;
         current_odom_msg_pose.position.y = 0;
         current_odom_msg_pose.position.z = 0;
@@ -354,147 +354,35 @@ class OnlineMeshMapper : public rclcpp::Node{
         point.z = dest_z;
         points->push_back(point);
     }
-    void raycast_delete(int64_t org_x, int64_t org_y,
-            int64_t org_z, int64_t dest_x, int64_t dest_y, int64_t dest_z, bool splash_delete){
-        // Validate input
-        int64_t initial_dist = get_manhattan_dist(org_x, org_y, org_z, dest_x, dest_y, dest_z);
-        if (initial_dist <= 2) {
-            return;
-        }
-    
-        // Calculate direction vector
-        int64_t dx = dest_x - org_x;
-        int64_t dy = dest_y - org_y;
-        int64_t dz = dest_z - org_z;
-    
-        // Use the largest component to determine steps
-        // This ensures we visit every voxel the ray passes through
-        int64_t steps = std::max({std::abs(dx), std::abs(dy), std::abs(dz)});
-    
-        if (steps == 0) {
-            return;
-        }
-    
-        // Normalize to step size
-        double step_x = static_cast<double>(dx) / steps;
-        double step_y = static_cast<double>(dy) / steps;
-        double step_z = static_cast<double>(dz) / steps;
-    
-        int64_t threshold = splash_delete ? 3 : 4;
-        int64_t safety_limit = steps + 20;  // Hard limit to prevent infinite loops
-    
-        double pos_x = org_x;
-        double pos_y = org_y;
-        double pos_z = org_z;
-    
-        int64_t last_voxel_x = std::lround(pos_x);
-        int64_t last_voxel_y = std::lround(pos_y);
-        int64_t last_voxel_z = std::lround(pos_z);
-    
-        for (int64_t iteration = 0; iteration < safety_limit; iteration++) {
-            // Step along the ray
-            pos_x += step_x;
-            pos_y += step_y;
-            pos_z += step_z;
-        
-        // Round to current voxel
-            int64_t voxel_x = std::lround(pos_x);
-            int64_t voxel_y = std::lround(pos_y);
-            int64_t voxel_z = std::lround(pos_z);
-        
-        // Skip if we haven't moved to a new voxel (avoids duplicate deletions)
-            if (voxel_x == last_voxel_x && voxel_y == last_voxel_y && voxel_z == last_voxel_z) {
-                continue;
-            }
-        
-            last_voxel_x = voxel_x;
-            last_voxel_y = voxel_y;
-            last_voxel_z = voxel_z;
-        
-        // Check if we're close enough to destination
-            int64_t dist = get_manhattan_dist(voxel_x, voxel_y, voxel_z, dest_x, dest_y, dest_z);
-            if (dist <= threshold) {
-                break;  // Success - reached destination
-            }   
-        
-            // Delete the voxel
-            bool point_deleted = voxel_graph_delete(graph, voxel_x, voxel_y, voxel_z);
-        
-            // Apply splash radius if enabled
-            if (point_deleted && splash_delete) {
-                //delete_splash_radius(voxel_x, voxel_y, voxel_z);
-            }
-        }
-    }
-        /*
-        int64_t initial_dist = get_manhattan_dist(org_x, org_y, org_z, dest_x, dest_y, dest_z);
-        if(initial_dist <= 2){
-            return;
-        }
-        DoubleVector_t diff_vect;
-        diff_vect.x = dest_x - org_x;
-        diff_vect.y = dest_y - org_y;
-        diff_vect.z = dest_z - org_z;
-        //RCLCPP_WARN(this->get_logger(), "org_vect is %ld %ld %ld \n", org_x, org_y, org_z);
-        //RCLCPP_WARN(this->get_logger(), "dest_vect is %ld %ld %ld \n", dest_x, dest_y, dest_z);
-        //RCLCPP_WARN(this->get_logger(), "diff_vect is %f %f %f \n", diff_vect.x, diff_vect.y, diff_vect.z);
+
+    void raycast_delete(int64_t org_x, int64_t org_y, int64_t org_z,
+                    int64_t dest_x, int64_t dest_y, int64_t dest_z, bool splash_delete){
+        if(org_x == dest_x && org_y == dest_y && org_z == dest_z) return;
+
+        DoubleVector_t diff_vect{(double)(dest_x-org_x), (double)(dest_y-org_y), (double)(dest_z-org_z)};
+        double len2 = diff_vect.x*diff_vect.x + diff_vect.y*diff_vect.y + diff_vect.z*diff_vect.z;
+        if(len2 < 1.0) return;
+
         DoubleVector_t normal = double_vect_normalize(diff_vect);
-        //RCLCPP_WARN(this->get_logger(), "normal_vect is %f %f %f \n", normal.x, normal.y, normal.z);
-        double travel_x = org_x;
-        double travel_y = org_y;
-        double travel_z = org_z;
+        int64_t travel_x = org_x, travel_y = org_y, travel_z = org_z;
         uint32_t counter = 1;
-        uint32_t threshold = 4;
-        if(splash_delete){
-            threshold = 3;
+        uint32_t threshold = splash_delete ? 3 : 2;
+
+        uint32_t max_iter = (uint32_t)std::ceil(std::sqrt(len2)) + 16;
+
+        while(counter < max_iter &&
+            get_manhattan_dist(travel_x, travel_y, travel_z, dest_x, dest_y, dest_z) > threshold){
+
+        bool point_deleted = voxel_graph_delete(graph, travel_x, travel_y, travel_z);
+        if(point_deleted && splash_delete){
         }
-        int64_t max_iterations = initial_dist + 10;
-
-        while(get_manhattan_dist(travel_x, travel_y, travel_z, dest_x, dest_y, dest_z) > threshold){
-            bool point_deleted = voxel_graph_delete(graph, travel_x, travel_y, travel_z);
-            //RCLCPP_WARN(this->get_logger(), "at iteration %d out of %d", counter, max_iterations);
-            if(counter > max_iterations){
-
-                RCLCPP_ERROR(this->get_logger(), "raycast failed");
-                return;
-            }
-            if(point_deleted && splash_delete){
-                
-                voxel_graph_delete(graph, travel_x + 1, travel_y, travel_z);
-                voxel_graph_delete(graph, travel_x - 1, travel_y, travel_z);
-                voxel_graph_delete(graph, travel_x, travel_y + 1, travel_z);
-                voxel_graph_delete(graph, travel_x, travel_y - 1, travel_z);
-                voxel_graph_delete(graph, travel_x, travel_y, travel_z + 1);
-                voxel_graph_delete(graph, travel_x, travel_y, travel_z - 1);
-
-                voxel_graph_delete(graph, travel_x + 1, travel_y + 1, travel_z - 1);
-                voxel_graph_delete(graph, travel_x + 1, travel_y + 1, travel_z);
-                voxel_graph_delete(graph, travel_x + 1, travel_y + 1, travel_z);
-
-                voxel_graph_delete(graph, travel_x + 1, travel_y - 1, travel_z - 1);
-                voxel_graph_delete(graph, travel_x + 1, travel_y - 1, travel_z);
-                voxel_graph_delete(graph, travel_x + 1, travel_y - 1, travel_z);
-
-                voxel_graph_delete(graph, travel_x - 1, travel_y + 1, travel_z - 1);
-                voxel_graph_delete(graph, travel_x - 1, travel_y + 1, travel_z);
-                voxel_graph_delete(graph, travel_x - 1, travel_y + 1, travel_z);
-                
-                voxel_graph_delete(graph, travel_x - 1, travel_y - 1, travel_z - 1);
-                voxel_graph_delete(graph, travel_x - 1, travel_y - 1, travel_z);
-                voxel_graph_delete(graph, travel_x - 1, travel_y - 1, travel_z);
-                
-            }
-            //RCLCPP_WARN(this->get_logger(), "old_ray_vect is %ld %ld %ld \n", travel_x, travel_y, travel_z);
-            counter += 2;
-            travel_x = (double) org_x + (normal.x * (double) counter);
-            travel_y = (double) org_y + (normal.y * (double) counter);
-            travel_z = (double) org_z + (normal.z * (double) counter);
-            //RCLCPP_WARN(this->get_logger(), "new_ray_vect is %ld %ld %ld \n", travel_x, travel_y, travel_z);
+        counter++;
+        travel_x = std::lround(org_x + normal.x * counter);
+        travel_y = std::lround(org_y + normal.y * counter);
+        travel_z = std::lround(org_z + normal.z * counter);
         }
-        //voxel_graph_delete(graph, dest_x, dest_y, dest_z);
     }
-        */
-    
+
     int64_t get_manhattan_dist(int64_t org_x, int64_t org_y, int64_t org_z,
              int64_t dest_x, int64_t dest_y, int64_t dest_z)
     {
@@ -2335,6 +2223,8 @@ class OnlineMeshMapper : public rclcpp::Node{
         io_mutex.unlock();
     }
 
+
+
     bool first_call_pc_in = true;
     void point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {        
@@ -2343,7 +2233,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         io_mutex.lock();
         const auto start = std::chrono::steady_clock::now();
         auto time_since_last_processed_pointcloud = std::chrono::duration_cast<std::chrono::milliseconds>(start - last_processed_pointcloud_msg);
-        if(time_since_last_processed_pointcloud < std::chrono::milliseconds{1000}){
+        if(time_since_last_processed_pointcloud < std::chrono::milliseconds{500}){
             io_mutex.unlock();
             return;
         }
@@ -2367,7 +2257,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         pcl::fromROSMsg(transformed_cloud, *raw_cloud);
         pcl::RandomSample<pcl::PointXYZ> rs;
         rs.setInputCloud(raw_cloud);
-        rs.setSample(raw_cloud->size() * ((float)scalar * 0.01f));
+        rs.setSample(raw_cloud->size() * ((float)scalar * 0.02f));
         rs.filter(*downsampled_cloud);
         Eigen::Quaternionf q(
                 global_point.orientation.w,
@@ -2387,7 +2277,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         for(auto &p : input_cloud.points){
             p.x = (int64_t) (p.x * (float)scalar);
             p.y = (int64_t) (p.y * (float)scalar);
-            p.z = (int64_t) (p.z * (float)scalar);
+            p.z = (int64_t) (p.z * (float)scalar); 
         }
         //TODO: I HAVE TO TRANSFORM THIS POINTCLOUD FROM THE FRAME ID OF THE MSG
         //TO GLOBAL POSE THEN I HAVE TO DO ICP
@@ -2403,7 +2293,9 @@ class OnlineMeshMapper : public rclcpp::Node{
                 int64_t z_point = p.z;
                 voxel_graph_insert(graph, x_point, y_point, z_point);
             }
-
+            io_mutex.unlock();
+            return;
+        }
             /*
             for (const auto &p : input_cloud.points) { 
                 voxel_graph_insert(graph, p.x, p.y, p.z);
@@ -2412,24 +2304,33 @@ class OnlineMeshMapper : public rclcpp::Node{
             auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
             RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %ld ns", diff.count());
             */
-            io_mutex.unlock();
-            return;
-        }
         pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
         Eigen::Matrix4f corrective_transform;
         bool converged = run_icp(input_cloud, map_cloud, &corrected_cloud, &corrective_transform);
         if(!converged){
             RCLCPP_ERROR(this->get_logger(), "pose correction failed!");
+            /*
+            int64_t robot_point_x = global_point.position.x * (float) scalar;
+            int64_t robot_point_y = global_point.position.y * (float) scalar;
+            int64_t robot_point_z = global_point.position.z * (float) scalar;
+            for(const auto &p : input_cloud.points){
+                int64_t x_point = p.x;
+                int64_t y_point = p.y;
+                int64_t z_point = p.z;
+                if(z_point > robot_point_z){
+                    raycast_delete(robot_point_x, robot_point_y, robot_point_z, x_point, y_point, z_point, false);
+                }
+            }
+            for(const auto &p : input_cloud.points){
+                int64_t x_point = p.x;
+                int64_t y_point = p.y;
+                int64_t z_point = p.z;
+                voxel_graph_insert(graph, x_point, y_point, z_point);
+            }
+            */
             io_mutex.unlock();
             return;
-        }/*
-        for(const auto &p : corrected_cloud.points){
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
-            voxel_graph_insert(graph, x_point, y_point, z_point);
         }
-        */
         global_point.position.x += corrective_transform(0,3) / (float)scalar;
         global_point.position.y += corrective_transform(1,3) / (float)scalar;
         global_point.position.z += corrective_transform(2,3) / (float)scalar;
@@ -2450,20 +2351,29 @@ class OnlineMeshMapper : public rclcpp::Node{
         int64_t robot_point_z = global_point.position.z * (float) scalar;
         int64_t random_sample_interval = 1000;
         int64_t current_sample = 0;
-        /*
+        
         for(const auto &p : corrected_cloud.points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
             current_sample++;
-            if(current_sample >= 1000){
-                //RCLCPP_INFO(this->get_logger(), "raycast debug!");
+            /*
+            if(z_point > global_point.position.z * (float) scalar){
                 raycast_delete(robot_point_x, robot_point_y, robot_point_z, x_point, y_point, z_point, false);
+            }
+            */
+            if(current_sample >= scalar){
+                //RCLCPP_INFO(this->get_logger(), "raycast debug!");
+                if(z_point > global_point.position.z * (float) scalar){
+                    raycast_delete(robot_point_x, robot_point_y, robot_point_z, x_point, y_point, z_point, false);
+                }
+
+                //
                 //RCLCPP_INFO(this->get_logger(), "raycast done!");
                 current_sample = 0;
             }
+            
         }
-        */
         for(const auto &p : corrected_cloud.points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
@@ -2474,7 +2384,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         const auto end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
-        RCLCPP_INFO(this->get_logger(), "pose correction function took %d ms", diff.count());
+        RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %d ms", diff.count());
 
         io_mutex.unlock();
 
@@ -2648,9 +2558,9 @@ class OnlineMeshMapper : public rclcpp::Node{
         
         pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
         icp.setMaxCorrespondenceDistance((float) scalar * 1.0f);
-        icp.setTransformationEpsilon(1e-4);//stop iterating when transform delta below
-        icp.setEuclideanFitnessEpsilon(1e-3);//stop iterating when mean squared error below
-        icp.setMaximumIterations(100);
+        icp.setTransformationEpsilon(1e-7);//stop iterating when transform delta below
+        icp.setEuclideanFitnessEpsilon(1e-6);//stop iterating when mean squared error below
+        icp.setMaximumIterations(30);
         icp.setInputSource(source);
         icp.setInputTarget(target);
         /*
@@ -2689,8 +2599,8 @@ class OnlineMeshMapper : public rclcpp::Node{
         Eigen::AngleAxisf angle_axis(rot);
         float rotation_angle = std::abs(angle_axis.angle());
         
-        float max_translation = 0.33f * (float) scalar;
-        float max_rotation = 0.4; //radians
+        float max_translation = 0.1f * (float) scalar;
+        float max_rotation = 0.3; //radians
 
         if(translation > max_translation || rotation_angle > max_rotation){
             RCLCPP_ERROR(this->get_logger(), "ICP correction implausible, rejecting");
@@ -2780,9 +2690,9 @@ class OnlineMeshMapper : public rclcpp::Node{
         int64_t robot_point_y = global_point.position.y * (float) scalar;
         int64_t robot_point_z = global_point.position.z * (float) scalar;
         for(const auto &p : input_cloud.points){
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
+            int64_t x_point = p.x * (float) scalar;
+            int64_t y_point = p.y * (float) scalar;
+            int64_t z_point = p.z * (float) scalar;
             raycast_delete(robot_point_x, robot_point_y, robot_point_z, x_point, y_point, z_point, false);
         }
         for(auto &p : input_cloud.points){
@@ -2792,11 +2702,14 @@ class OnlineMeshMapper : public rclcpp::Node{
             p.x = x_point;
             p.y = y_point;
             p.z = z_point;
+            voxel_graph_insert(graph, x_point, y_point, z_point);
+            /*
             float x_dist = x_point - global_point.position.x * (float) scalar;
             float y_dist = y_point - global_point.position.y * (float) scalar;
             if(x_dist * x_dist + y_dist * y_dist > (1.0f * (float)scalar) * (1.0f * (float) scalar)){
                 voxel_graph_insert(graph, x_point, y_point, z_point);
             }
+            */
         }
         /*
         for(auto &p : input_del_cloud.points){
