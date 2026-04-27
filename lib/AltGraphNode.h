@@ -18,35 +18,35 @@ void alt_graph_node_set(AltGraphNode_t* input, uint32_t position);
 bool alt_graph_node_get(AltGraphNode_t* input, uint32_t position);
 void alt_graph_node_delete(AltGraphNode_t* input, uint32_t position);
 
-void alt_graph_node_set_first_node_dead(AltGraphNode_t* input);
-void alt_graph_node_set_second_node_dead(AltGraphNode_t* input);
-void alt_graph_node_set_third_node_dead(AltGraphNode_t* input);
-void alt_graph_node_set_fourth_node_dead(AltGraphNode_t* input);
+void alt_graph_node_first_set_bit_one(AltGraphNode_t* input);
+void alt_graph_node_second_set_bit_one(AltGraphNode_t* input);
+void alt_graph_node_third_set_bit_one(AltGraphNode_t* input);
+void alt_graph_node_fourth_set_bit_one(AltGraphNode_t* input);
                                                                                 
-void alt_graph_node_clear_first_node_dead(AltGraphNode_t* input);
-void alt_graph_node_clear_second_node_dead(AltGraphNode_t* input);
-void alt_graph_node_clear_third_node_dead(AltGraphNode_t* input);
-void alt_graph_node_clear_fourth_node_dead(AltGraphNode_t* input);
+void alt_graph_node_first_clear_bit_one(AltGraphNode_t* input);
+void alt_graph_node_second_clear_bit_one(AltGraphNode_t* input);
+void alt_graph_node_third_clear_bit_one(AltGraphNode_t* input);
+void alt_graph_node_fourth_clear_bit_one(AltGraphNode_t* input);
 
-bool alt_graph_node_get_first_node_dead(AltGraphNode_t* input);
-bool alt_graph_node_get_second_node_dead(AltGraphNode_t* input);
-bool alt_graph_node_get_third_node_dead(AltGraphNode_t* input);
-bool alt_graph_node_get_fourth_node_dead(AltGraphNode_t* input);
+bool alt_graph_node_first_get_bit_one(AltGraphNode_t* input);
+bool alt_graph_node_second_get_bit_one(AltGraphNode_t* input);
+bool alt_graph_node_third_get_bit_one(AltGraphNode_t* input);
+bool alt_graph_node_fourth_get_bit_one(AltGraphNode_t* input);
 
-void alt_graph_node_set_first_node_visited(AltGraphNode_t* input);
-void alt_graph_node_set_second_node_visited(AltGraphNode_t* input);
-void alt_graph_node_set_third_node_visited(AltGraphNode_t* input);
-void alt_graph_node_set_fourth_node_visited(AltGraphNode_t* input);
+void alt_graph_node_first_set_bit_two(AltGraphNode_t* input);
+void alt_graph_node_second_set_bit_two(AltGraphNode_t* input);
+void alt_graph_node_third_set_bit_two(AltGraphNode_t* input);
+void alt_graph_node_fourth_set_bit_two(AltGraphNode_t* input);
                                                                                 
-void alt_graph_node_clear_first_node_visited(AltGraphNode_t* input);
-void alt_graph_node_clear_second_node_visited(AltGraphNode_t* input);
-void alt_graph_node_clear_third_node_visited(AltGraphNode_t* input);
-void alt_graph_node_clear_fourth_node_visited(AltGraphNode_t* input);
+void alt_graph_node_first_clear_bit_two(AltGraphNode_t* input);
+void alt_graph_node_second_clear_bit_two(AltGraphNode_t* input);
+void alt_graph_node_third_clear_bit_two(AltGraphNode_t* input);
+void alt_graph_node_fourth_clear_bit_two(AltGraphNode_t* input);
 
-bool alt_graph_node_get_first_node_visited(AltGraphNode_t* input);
-bool alt_graph_node_get_second_node_visited(AltGraphNode_t* input);
-bool alt_graph_node_get_third_node_visited(AltGraphNode_t* input);
-bool alt_graph_node_get_fourth_node_visited(AltGraphNode_t* input);
+bool alt_graph_node_first_get_bit_two(AltGraphNode_t* input);
+bool alt_graph_node_second_get_bit_two(AltGraphNode_t* input);
+bool alt_graph_node_third_get_bit_two(AltGraphNode_t* input);
+bool alt_graph_node_fourth_get_bit_two(AltGraphNode_t* input);
  
 #ifdef __cplusplus                                                              
 }                                                                               

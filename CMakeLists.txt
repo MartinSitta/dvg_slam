@@ -28,7 +28,7 @@ find_package(tf2_sensor_msgs REQUIRED)
 
 add_library(lib_map_model lib/Chunk.c lib/GraphNode.c lib/HashUtils.c
     lib/murmur3.c lib/Vertex.c lib/VoxelGraph.c lib/AltChunk.c
-    lib/AltGraphNode.c lib/FibonacciHash.c)     
+    lib/AltGraphNode.c lib/FibonacciHash.c lib/AltGraphBitMap.c)     
 add_executable(online_mesh_mapper src/online_mesh_mapper.cpp)
 target_include_directories(online_mesh_mapper PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

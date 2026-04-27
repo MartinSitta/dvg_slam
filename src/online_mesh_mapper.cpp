@@ -358,7 +358,8 @@ class OnlineMeshMapper : public rclcpp::Node{
     void raycast_delete(int64_t org_x, int64_t org_y, int64_t org_z,
                     int64_t dest_x, int64_t dest_y, int64_t dest_z, bool splash_delete){
         if(org_x == dest_x && org_y == dest_y && org_z == dest_z) return;
-
+        int64_t max_deletions = (float) scalar * 0.3f;
+        int64_t current_del_count = 0;
         DoubleVector_t diff_vect{(double)(dest_x-org_x), (double)(dest_y-org_y), (double)(dest_z-org_z)};
         double len2 = diff_vect.x*diff_vect.x + diff_vect.y*diff_vect.y + diff_vect.z*diff_vect.z;
         if(len2 < 1.0) return;
@@ -373,8 +374,14 @@ class OnlineMeshMapper : public rclcpp::Node{
         while(counter < max_iter &&
             get_manhattan_dist(travel_x, travel_y, travel_z, dest_x, dest_y, dest_z) > threshold){
 
-        bool point_deleted = voxel_graph_delete(graph, travel_x, travel_y, travel_z);
-        if(point_deleted && splash_delete){
+        bool point_detected = voxel_graph_lookup(graph, travel_x, travel_y, travel_z);
+        if(current_del_count >=  max_deletions)
+        {
+            return;
+        }
+        if(point_detected){
+            voxel_graph_delete(graph, travel_x, travel_y, travel_z);
+            current_del_count++;
         }
         counter++;
         travel_x = std::lround(org_x + normal.x * counter);
@@ -2363,7 +2370,7 @@ class OnlineMeshMapper : public rclcpp::Node{
             io_mutex.unlock();
             return;
         }
-        dynamic_map_entry_cap = dynamic_map_entry_cap * 0.8;
+        dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
         const auto pc_start = std::chrono::steady_clock::now();
         for(const auto &p : corrected_cloud.points){
             int64_t x_point = p.x;
@@ -2575,8 +2582,8 @@ class OnlineMeshMapper : public rclcpp::Node{
         
         pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
         icp.setMaxCorrespondenceDistance((float) scalar * 1.0f);
-        icp.setTransformationEpsilon(1e-4);//stop iterating when transform delta below
-        icp.setEuclideanFitnessEpsilon(1e-3);//stop iterating when mean squared error below
+        icp.setTransformationEpsilon(1e-6);//stop iterating when transform delta below
+        icp.setEuclideanFitnessEpsilon(1e-5);//stop iterating when mean squared error below
         icp.setMaximumIterations(10000);
         icp.setInputSource(source);
         icp.setInputTarget(target);
