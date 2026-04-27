@@ -27,6 +27,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/registration/icp.h>
 #include <pcl/filters/random_sample.h>
+#include <pcl/filters/filter.h>
 #include "../lib/VoxelGraph.h"
 #include "mesh_msgs/msg/mesh_geometry_stamped.hpp"
 // ROS / messages
@@ -2260,11 +2261,18 @@ class OnlineMeshMapper : public rclcpp::Node{
         }
         pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        std::vector<int> nan_indices;
         pcl::fromROSMsg(transformed_cloud, *raw_cloud);
+        pcl::removeNaNFromPointCloud(*raw_cloud, *raw_cloud, nan_indices);
+        if(raw_cloud->empty()){
+            RCLCPP_WARN(this->get_logger(), "pointcloud empty after NaN removal!");
+            io_mutex.unlock();
+            return;
+        }
         //pcl::fromROSMsg(*msg, *raw_cloud);
         pcl::RandomSample<pcl::PointXYZ> rs;
         rs.setInputCloud(raw_cloud);
-        rs.setSample(raw_cloud->size() * ((float)scalar * 0.002f));
+        rs.setSample(raw_cloud->size() * 0.05f);
         rs.filter(*downsampled_cloud);
         Eigen::Quaternionf q(
                 global_point.orientation.w,
@@ -2281,10 +2289,10 @@ class OnlineMeshMapper : public rclcpp::Node{
         pcl::PointCloud<pcl::PointXYZ> input_cloud;
         pcl::transformPointCloud(*downsampled_cloud, input_cloud, transform);
         for(auto &p : input_cloud.points){
-            p.x = (int64_t)(p.x * (float)scalar);
-            p.y = (int64_t)(p.y * (float)scalar);
-            p.z = (int64_t)(p.z * (float)scalar); 
-        }
+            p.x = (p.x * (float)scalar);
+            p.y = (p.y * (float)scalar);
+            p.z = (p.z * (float)scalar);
+        } 
         //TODO: I HAVE TO TRANSFORM THIS POINTCLOUD FROM THE FRAME ID OF THE MSG
         //TO GLOBAL POSE THEN I HAVE TO DO ICP
         //THIS SHOULD LOOK LIKE: TRANSFORM FROM MSG FRAME TO ODOM AND THEN APPLY
@@ -2338,21 +2346,34 @@ class OnlineMeshMapper : public rclcpp::Node{
             io_mutex.unlock();
             return;
         }
-        global_point.position.x += corrective_transform(0,3) / (float)scalar;
-        global_point.position.y += corrective_transform(1,3) / (float)scalar;
-        global_point.position.z += corrective_transform(2,3) / (float)scalar;
         Eigen::Matrix3f rotation = corrective_transform.block<3,3>(0,0);
         Eigen::Quaternionf q_correction(rotation);
+        q_correction.normalize();
+        Eigen::Vector3f t_correction(
+            corrective_transform(0,3) / (float) scalar,
+            corrective_transform(1,3) / (float) scalar,
+            corrective_transform(2,3) / (float) scalar
+        );
+        Eigen::Vector3f t_old(
+            global_point.position.x,
+            global_point.position.y,
+            global_point.position.z
+        );
         Eigen::Quaternionf q_current(
                 global_point.orientation.w,
                 global_point.orientation.x,
                 global_point.orientation.y,
                 global_point.orientation.z);
+        Eigen::Vector3f t_new = q_correction * t_old + t_correction;
         Eigen::Quaternionf q_corrected = (q_correction * q_current).normalized();
         global_point.orientation.x = q_corrected.x();
         global_point.orientation.y = q_corrected.y();
         global_point.orientation.z = q_corrected.z();
         global_point.orientation.w = q_corrected.w();
+        global_point.position.x = t_new.x();
+        global_point.position.y = t_new.y();
+        global_point.position.z = t_new.z();
+
         int64_t robot_point_x = global_point.position.x * (float) scalar;
         int64_t robot_point_y = global_point.position.y * (float) scalar;
         int64_t robot_point_z = global_point.position.z * (float) scalar;
@@ -2581,10 +2602,10 @@ class OnlineMeshMapper : public rclcpp::Node{
         pcl::PointCloud<pcl::PointXYZ>::Ptr target(new pcl::PointCloud<pcl::PointXYZ>(map_cloud));
         
         pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-        icp.setMaxCorrespondenceDistance((float) scalar * 1.0f);
-        icp.setTransformationEpsilon(1e-6);//stop iterating when transform delta below
-        icp.setEuclideanFitnessEpsilon(1e-5);//stop iterating when mean squared error below
-        icp.setMaximumIterations(10000);
+        icp.setMaxCorrespondenceDistance((float) scalar * 0.3f);
+        icp.setTransformationEpsilon(1e-5);//stop iterating when transform delta below
+        icp.setEuclideanFitnessEpsilon(1e-4);//stop iterating when mean squared error below
+        icp.setMaximumIterations(30);
         icp.setInputSource(source);
         icp.setInputTarget(target);
         /*
@@ -2608,22 +2629,24 @@ class OnlineMeshMapper : public rclcpp::Node{
         double fitness = icp.getFitnessScore((float)scalar * 1.0f);
         double fitness_threshold = (double) scalar * 0.2;
         *fitness_out = fitness;
+        /*
         if(fitness > fitness_threshold){
             RCLCPP_ERROR(this->get_logger(), "ICP fitness score is too bad: %f", fitness);
             return false;
         }
+        */
         *corrected_cloud_out = *aligned;
         *transform_out = icp.getFinalTransformation();
         
         float tx = (*transform_out)(0,3);
         float ty = (*transform_out)(1,3);
-        float tz = (*transform_out)(2,3) * 4;
+        float tz = (*transform_out)(2,3);
         float translation = std::sqrt(tx * tx + ty * ty + tz * tz);
         
         Eigen::Matrix3f rot = (*transform_out).block<3,3>(0,0);
         Eigen::AngleAxisf angle_axis(rot);
         float rotation_angle = std::abs(angle_axis.angle());
-        /*
+        
         float max_translation = 1.0f * (float) scalar;
         float max_rotation = 0.4; //radians
 
@@ -2631,7 +2654,7 @@ class OnlineMeshMapper : public rclcpp::Node{
             RCLCPP_ERROR(this->get_logger(), "ICP correction implausible, rejecting");
             return false;
         }
-        */        
+                
         return true;
     }
     void octomap_bin_callback(const octomap_msgs::msg::Octomap::SharedPtr msg){
