@@ -21,8 +21,8 @@ typedef struct{
     int64_t z_offset;
     //void* chunk_mesh;
     bool change_occurred;
-    AltGraphBitMap_t occupancy;
-    AltGraphBitMap_t* visited;
+    AltGraphBitMap_t occupancy_bit_one;
+    AltGraphBitMap_t occupancy_bit_two;
     AltGraphBitMap_t* inflation;
     //nodes first two bits contains the occupied and visited bit of each node
     //nodes second two bits contains the clearance bit and a dead bit of each node
@@ -38,11 +38,11 @@ typedef struct{
 int64_t alt_chunk_build_anchor_coord(int64_t coord);
 void alt_chunk_insert_inflation(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
 void alt_chunk_delete_inflation(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
-void alt_chunk_lookup_inflation(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
+bool alt_chunk_lookup_inflation(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
 void alt_chunk_init(AltChunk_t* chunk);
 void alt_chunk_insert(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
 void alt_chunk_delete(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
-bool alt_chunk_lookup(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
+uint8_t alt_chunk_lookup(AltChunk_t* chunk, int64_t x, int64_t y, int64_t z);
 
 #ifdef __cplusplus                                                              
 }                                                                               

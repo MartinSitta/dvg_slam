@@ -101,10 +101,10 @@ typedef union{
 } FUCKING_WHY_DO_I_HAVE_TO_DO_THIS_GOD_IS_DEAD_AND_I_KILLED_HIM_t;
 
 
-class OnlineMeshMapper : public rclcpp::Node{
+class DvgSlam : public rclcpp::Node{
   public:
-    OnlineMeshMapper()
-    : Node("online_mesh_mapper"), count_(0),
+    DvgSlam()
+    : Node("dvg_slam"), count_(0),
       clock_(std::make_shared<rclcpp::Clock>(RCL_ROS_TIME)){   
         this->declare_parameter<std::string>("in_topic", "");
         this->declare_parameter<std::string>("in_del_topic", "");
@@ -170,27 +170,27 @@ class OnlineMeshMapper : public rclcpp::Node{
         RCLCPP_INFO(this->get_logger(), "initializing topics\n");
         publisher_ = this->create_publisher<mesh_msgs::msg::MeshGeometryStamped>(out_topic, 1);
         timer_ = this->create_wall_timer(
-        1000ms, std::bind(&OnlineMeshMapper::timer_callback, this));
+        1000ms, std::bind(&DvgSlam::timer_callback, this));
         if(topic != ""){
             subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
                     topic , 1,
-                    std::bind(&OnlineMeshMapper::point_cloud_in_callback, 
+                    std::bind(&DvgSlam::point_cloud_in_callback, 
                     this, _1));
         }
         subscription_two = this->create_subscription<nav_msgs::msg::Odometry>(odom_topic,
-                1, std::bind(&OnlineMeshMapper::odom_callback, this, _1)); 
+                1, std::bind(&DvgSlam::odom_callback, this, _1)); 
         if(octomap_binary_topic != "")
         {
             octomap_binary_subscription = this->create_subscription<octomap_msgs::msg::Octomap>(
                     octomap_binary_topic, 1,
-                    std::bind(&OnlineMeshMapper::octomap_bin_callback,
+                    std::bind(&DvgSlam::octomap_bin_callback,
                     this, _1));
         }
         tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         publisher_two = this->create_publisher<nav_msgs::msg::Odometry>("debug_map_pose", 1);
         timer_two = this->create_wall_timer(
-        10ms, std::bind(&OnlineMeshMapper::debug_map_pose_callback, this));
+        10ms, std::bind(&DvgSlam::debug_map_pose_callback, this));
         current_odom_msg_pose.position.x = 0;
         current_odom_msg_pose.position.y = 0;
         current_odom_msg_pose.position.z = 0;
@@ -210,9 +210,10 @@ class OnlineMeshMapper : public rclcpp::Node{
         last_processed_pointcloud_msg = std::chrono::steady_clock::now();
         RCLCPP_INFO(this->get_logger(), "starting the mapper\n");
         graph = voxel_graph_init(this->chunk_amount);
+        assert(graph != NULL);
         RCLCPP_INFO(this->get_logger(), "node initialized\n");
     }
-    ~OnlineMeshMapper(){
+    ~DvgSlam(){
         RCLCPP_WARN(this->get_logger(), "Terminating node\n");
         RCLCPP_WARN(this->get_logger(), "Publishing final mesh\n");
         if(v2_mesher){
@@ -1772,7 +1773,7 @@ class OnlineMeshMapper : public rclcpp::Node{
             }
         }
         for(uint32_t i = 0; i < chunk_ptrs.size(); i++){
-            thread* t = new thread(&OnlineMeshMapper::build_mesh_section_global, this, i, chunk_ptrs.at(i), &chunk_local_meshes, false);
+            thread* t = new thread(&DvgSlam::build_mesh_section_global, this, i, chunk_ptrs.at(i), &chunk_local_meshes, false);
             active_threads.push_back(t);
         }
         for(uint32_t i = 0; i < active_threads.size(); i++){
@@ -1782,7 +1783,7 @@ class OnlineMeshMapper : public rclcpp::Node{
         return;
 
     }
-    static void build_mesh_section_global(OnlineMeshMapper* self, uint32_t vect_index,
+    static void build_mesh_section_global(DvgSlam* self, uint32_t vect_index,
             AltChunk_t* chunk, std::vector<ChunkMesh_t>* output, bool wavefront){
         //for(uint32_t i = first_index; i <= last_index; i++){
             //output->at(i) = self->genChunkMesh(&(graph->chunks[i]));
@@ -1833,7 +1834,7 @@ class OnlineMeshMapper : public rclcpp::Node{
             }
         }
         for(uint32_t i = 0; i < chunk_ptrs.size(); i++){
-            thread* t = new thread(&OnlineMeshMapper::build_mesh_section_global, this, i, chunk_ptrs.at(i), &chunk_local_meshes, false);
+            thread* t = new thread(&DvgSlam::build_mesh_section_global, this, i, chunk_ptrs.at(i), &chunk_local_meshes, false);
             active_threads.push_back(t); 
         }
         for(uint32_t i = 0; i < active_threads.size(); i++){
@@ -2104,7 +2105,6 @@ class OnlineMeshMapper : public rclcpp::Node{
     bool first_call_pc_in = true;
     void point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {        
-
         io_mutex.lock();
         const auto pose_start = std::chrono::steady_clock::now();
         auto time_since_last_processed_pointcloud = std::chrono::duration_cast<std::chrono::milliseconds>(pose_start - last_processed_pointcloud_msg);
@@ -2726,7 +2726,7 @@ int main(int argc, char ** argv)
 {
 
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<OnlineMeshMapper>());
+    rclcpp::spin(std::make_shared<DvgSlam>());
     rclcpp::shutdown();
     
     return 0;

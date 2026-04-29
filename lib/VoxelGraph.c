@@ -20,7 +20,7 @@ VoxelGraph_t* voxel_graph_init(uint32_t chunk_count){
     output->total_hash_collisions = 0;
     if(((chunk_hash_table_size) & (chunk_hash_table_size - 1)) != 0){
         bool val_found = false;
-        for(uint32_t i = 1; (i < (i << 31)) && !val_found; i << 1){
+        for(uint32_t i = 1; (i < (i << 31)) && !val_found; i = i << 1){
             if(i > chunk_hash_table_size){
                 chunk_hash_table_size = i;
                 val_found = true;
@@ -36,7 +36,7 @@ VoxelGraph_t* voxel_graph_init(uint32_t chunk_count){
     voxel_graph_init_arrays(output);
     return output;
 }
-bool voxel_graph_lookup(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+uint8_t voxel_graph_lookup(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
     AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
     if(chunk == NULL){
         return false;
@@ -77,7 +77,7 @@ bool voxel_graph_insert(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
         return false;
     }
     assert(graph->current_chunk_index < graph->chunk_amount);
-    if(graph->current_chunk_index < 0){
+    if(graph->current_chunk_index >= graph->chunk_amount){
         return false;
     }
     assert(chunk->x_offset == alt_chunk_build_anchor_coord(x));

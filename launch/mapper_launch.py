@@ -5,10 +5,10 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
         Node(
-            package='online_mesh_mapper',
-            namespace='online_mesh_mapper',
-            executable='online_mesh_mapper',
-            name='online_mesh_mapper',
+            package='dvg_slam',
+            namespace='dvg_slam',
+            executable='dvg_slam',
+            name='dvg_slam',
             parameters=[{
                 'in_topic': '/Spot/Velodyne_Puck/point_cloud', #input topic of type pointcloud_2
                 'in_del_topic': '', #input topic of type pointcloud2

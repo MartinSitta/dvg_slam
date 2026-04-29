@@ -83,7 +83,7 @@ int main(){
     for(int x = 32; x < 48; x++){
         for(int y = 32; y < 48; y++){
             for(int z = 32; z < 48; z++){
-                assert(voxel_graph_lookup(graph, x,y,z));
+                assert(voxel_graph_lookup(graph, x,y,z) == 2);
             }
         }
     }
@@ -101,7 +101,7 @@ int main(){
     for(int x = 32; x < 48; x++){
         for(int y = 32; y < 48; y++){
             for(int z = 32; z < 48; z++){
-                assert(!voxel_graph_lookup(graph, x,y,z));
+                assert(voxel_graph_lookup(graph, x,y,z) == 1);
             }
         }
     }
