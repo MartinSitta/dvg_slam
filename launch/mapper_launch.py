@@ -16,7 +16,7 @@ def generate_launch_description():
                 'odometry_msg_topic': '/Spot/odometry', #topic that outputs nav_msgs_msg_odometry
                 'octomap_binary_topic' : '',#/octomap_binary', #input topic of type octomap
                 #(octomap_binary)
-                'scalar': 10,
+                'scalar': 20,
                 'render_distance_horizontal':20,
                 'render_distance_vertical':20,
                 'out_topic':'/navigation/mesh_map',

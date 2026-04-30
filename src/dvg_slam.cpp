@@ -21,9 +21,11 @@
 #include <tf2/transform_datatypes.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
+#include <tf2_eigen/tf2_eigen.hpp>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <pcl/conversions.h>
+//#include <pcl_ros/transforms.hpp>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/registration/icp.h>
 #include <pcl/filters/random_sample.h>
@@ -2112,36 +2114,20 @@ class DvgSlam : public rclcpp::Node{
             io_mutex.unlock();
             return;
         }
-        sensor_msgs::msg::PointCloud2 transformed_cloud;
+        geometry_msgs::msg::TransformStamped tf_sensor_to_base;
         try{
-            auto tf = tf_buffer_->lookupTransform(
+            tf_sensor_to_base = tf_buffer_->lookupTransform(
                     "base_link",
                     msg->header.frame_id,
                     msg->header.stamp,
                     rclcpp::Duration::from_seconds(0.1));
-            tf2::doTransform(*msg, transformed_cloud, tf);
         }
         catch(const tf2::TransformException& ex){
             RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
             io_mutex.unlock();
             return;
         }
-        pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        std::vector<int> nan_indices;
-        pcl::fromROSMsg(transformed_cloud, *raw_cloud);
-        pcl::removeNaNFromPointCloud(*raw_cloud, *raw_cloud, nan_indices);
-        if(raw_cloud->empty()){
-            RCLCPP_WARN(this->get_logger(), "pointcloud empty after NaN removal!");
-            io_mutex.unlock();
-            return;
-        }
-        //pcl::fromROSMsg(*msg, *raw_cloud);
-        pcl::RandomSample<pcl::PointXYZ> rs;
-        rs.setInputCloud(raw_cloud);
-        //rs.setSample(raw_cloud->size() * 0.05f);
-        rs.setSample(1000);
-        rs.filter(*downsampled_cloud);
+        Eigen::Affine3f sensor_to_base = tf2::transformToEigen(tf_sensor_to_base.transform).cast<float>();
         Eigen::Quaternionf q(
                 global_point.orientation.w,
                 global_point.orientation.x,
@@ -2152,15 +2138,35 @@ class DvgSlam : public rclcpp::Node{
                 global_point.position.x,
                 global_point.position.y,
                 global_point.position.z);
-        Eigen::Affine3f transform = Eigen::Affine3f::Identity();
-        transform = Eigen::Translation3f(t) * q;
-        pcl::PointCloud<pcl::PointXYZ> input_cloud;
-        pcl::transformPointCloud(*downsampled_cloud, input_cloud, transform);
-        for(auto &p : input_cloud.points){
+        Eigen::Affine3f base_to_pose = Eigen::Affine3f::Identity();
+        base_to_pose = Eigen::Translation3f(t) * q;
+        Eigen::Affine3f combined_transform = base_to_pose * sensor_to_base; 
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::fromROSMsg(*msg, *raw_cloud);
+        std::vector<int> nan_indices;
+        pcl::removeNaNFromPointCloud(*raw_cloud, *raw_cloud, nan_indices);
+        if(raw_cloud->empty()){
+            RCLCPP_WARN(this->get_logger(), "pointcloud empty after NaN removal!");
+            io_mutex.unlock();
+            return;
+        }
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::transformPointCloud(*raw_cloud, *transformed_cloud, combined_transform);
+
+        for(auto &p : transformed_cloud->points){
             p.x = (p.x * (float)scalar);
             p.y = (p.y * (float)scalar);
             p.z = (p.z * (float)scalar);
         } 
+        //pcl::fromROSMsg(*msg, *raw_cloud);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::RandomSample<pcl::PointXYZ> rs;
+        rs.setInputCloud(transformed_cloud);
+        //rs.setSample(raw_cloud->size() * 0.05f);
+        rs.setSample(200);
+        rs.filter(*downsampled_cloud);
         //TODO: I HAVE TO TRANSFORM THIS POINTCLOUD FROM THE FRAME ID OF THE MSG
         //TO GLOBAL POSE THEN I HAVE TO DO ICP
         //THIS SHOULD LOOK LIKE: TRANSFORM FROM MSG FRAME TO ODOM AND THEN APPLY
@@ -2169,7 +2175,7 @@ class DvgSlam : public rclcpp::Node{
         pcl::PointCloud<pcl::PointXYZ> map_cloud = get_local_pointcloud(global_point, radius);
         if(map_cloud.empty() || first_call_pc_in){
             first_call_pc_in = false;
-            for(const auto &p : input_cloud.points){
+            for(const auto &p : transformed_cloud->points){
                 int64_t x_point = p.x;
                 int64_t y_point = p.y;
                 int64_t z_point = p.z;
@@ -2189,7 +2195,7 @@ class DvgSlam : public rclcpp::Node{
         pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
         Eigen::Matrix4f corrective_transform;
         float fitness = 1000.0f;
-        bool converged = run_icp(input_cloud, map_cloud, &corrected_cloud, &corrective_transform, &fitness);
+        bool converged = run_icp(*downsampled_cloud, map_cloud, &corrected_cloud, &corrective_transform, &fitness);
         if(!converged){
             RCLCPP_ERROR(this->get_logger(), "pose correction failed!");
             /*
@@ -2214,6 +2220,7 @@ class DvgSlam : public rclcpp::Node{
             io_mutex.unlock();
             return;
         }
+        pcl::transformPointCloud(*transformed_cloud, *transformed_cloud, corrective_transform);
         Eigen::Matrix3f rotation = corrective_transform.block<3,3>(0,0);
         Eigen::Quaternionf q_correction(rotation);
         q_correction.normalize();
@@ -2262,7 +2269,7 @@ class DvgSlam : public rclcpp::Node{
         dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
         const auto pc_start = std::chrono::steady_clock::now();
         int64_t sample_ratio = 20;
-        for(const auto &p : corrected_cloud.points){
+        for(const auto &p : transformed_cloud->points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
@@ -2296,7 +2303,7 @@ class DvgSlam : public rclcpp::Node{
             
             
         }
-        for(const auto &p : corrected_cloud.points){
+        for(const auto &p : transformed_cloud->points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
