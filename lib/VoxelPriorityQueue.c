@@ -89,9 +89,13 @@ void voxel_priority_queue_enqueue(VoxelPriorityQueue_t* queue,
     slot->inserted_into_prio_queue = true;
     queue->current_element++;
 }
-Point_t* voxel_priority_queue_dequeue(VoxelPriorityQueue_t* queue,
-                                       VoxelHashMap_t* nodes){
-    if(queue->current_element == 0) return NULL;
+DequeueRetObject_t voxel_priority_queue_dequeue(VoxelPriorityQueue_t* queue,
+                                                VoxelHashMap_t* nodes){
+    DequeueRetObject_t ret;
+    Point_t ret_init_point = {0,0,0};
+    ret.point = ret_init_point;
+    ret.valid = false;
+    if(queue->current_element == 0) return ret;
     Point_t output_key = queue->array[0]; // return pointer to key in queue
     PointSlot_t* slot = voxel_hash_map_lookup(nodes, output_key.x, 
                                                output_key.y, output_key.z);
@@ -99,7 +103,9 @@ Point_t* voxel_priority_queue_dequeue(VoxelPriorityQueue_t* queue,
     queue->current_element--;
     queue->array[0] = queue->array[queue->current_element];
     heapify_down(queue->array, 0, queue->current_element, nodes);
-    return &output_key;
+    ret.point = output_key;
+    ret.valid = true;
+    return ret;
 }
 Point_t* voxel_priority_queue_peek(VoxelPriorityQueue_t* queue){
     return &queue->array[0];

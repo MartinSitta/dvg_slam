@@ -2747,17 +2747,22 @@ class DvgSlam : public rclcpp::Node{
         int64_t goal_x = 2.0f * (float) scalar;
         int64_t goal_y = 0.0f * (float) scalar;
         int64_t goal_z = 0.0f * (float) scalar;
+        starting_z += vertical_clearance / 2 + 1;
+        goal_z += vertical_clearance / 2 + 1;
         if(starting_x == goal_x && starting_y == goal_y && starting_z == goal_z){
             voxel_hash_map_free(nodes);
             voxel_priority_queue_free(prio_queue);
             return;
         }
-        starting_z += vertical_clearance / 2 + 1;
-        goal_z += vertical_clearance / 2 + 1;
+        
         if(voxel_graph_lookup_inflation(graph, starting_x, starting_y, starting_z)){
+            voxel_hash_map_free(nodes);
+            voxel_priority_queue_free(prio_queue);
             return;
         }
         if(voxel_graph_lookup_inflation(graph, goal_x, goal_y, goal_z)){
+            voxel_hash_map_free(nodes);
+            voxel_priority_queue_free(prio_queue);
             return;
         }
         bool first_node = true;
@@ -2771,12 +2776,12 @@ class DvgSlam : public rclcpp::Node{
                 voxel_priority_queue_enqueue(prio_queue, starting_slot->key, nodes);
             }
             //RCLCPP_INFO(this->get_logger(), "get hugged");
-            Point_t* ptr = voxel_priority_queue_dequeue(prio_queue, nodes);
+            DequeueRetObject_t ret = voxel_priority_queue_dequeue(prio_queue, nodes);
             //RCLCPP_INFO(this->get_logger(), "idiot");
-            if(ptr == NULL){
+            if(!ret.valid){
                 break;
             }
-            Point_t current_key = *ptr;
+            Point_t current_key = ret.point;
             PointSlot_t* current_slot = voxel_hash_map_lookup(nodes, current_key.x, current_key.y, current_key.z);
             if(current_slot->visited){
                 continue;
@@ -2793,6 +2798,7 @@ class DvgSlam : public rclcpp::Node{
                         if(!(x == current_slot->key.x && y == current_slot->key.y && z == current_slot->key.z) && 
                             !voxel_graph_lookup_inflation(graph, x, y, z)){
                             PointSlot_t* next_point = voxel_hash_map_insert(nodes, x, y, z);
+                            current_slot = voxel_hash_map_lookup(nodes, current_key.x, current_key.y, current_key.z);
                             int8_t dimension_diff = 0;
                             if(x != current_slot->key.x) dimension_diff++;
                             if(y != current_slot->key.y) dimension_diff++;
