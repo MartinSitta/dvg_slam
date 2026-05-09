@@ -15,6 +15,7 @@ extern "C"{
 typedef struct VoxelHashMap_t 
 {
     PointSlot_t* slots;
+    uint32_t hash_seed;
     uint64_t capacity;
     uint64_t occupied_slot_count;
     uint64_t tombstome_count;

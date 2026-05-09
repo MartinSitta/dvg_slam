@@ -303,7 +303,7 @@ class DvgSlam : public rclcpp::Node{
            if(point_detected){
                 DoubleVector_t voxel_normal = build_voxel_local_normal(normal, travel_x, travel_y, travel_z, 6);
                 double angle = voxel_normal.x * normal.x + voxel_normal.y * normal.y + voxel_normal.z * normal.z;
-                if(angle <= -0.3){
+                if(angle <= -0.6){
                     if(splash_delete){
                         for(int64_t splash_x = travel_x - (splash_diameter / 2);splash_x <= travel_x + (splash_diameter / 2); splash_x++){
                             for(int64_t splash_y = travel_y - (splash_diameter / 2);splash_y <= travel_y + (splash_diameter / 2); splash_y++){
@@ -2735,11 +2735,11 @@ class DvgSlam : public rclcpp::Node{
     }
     std::mutex nav_mutex;
     void nav_callback(){
-        //std::thread t1(DvgSlam::do_astar_pathfinding, this);
-        io_mutex.lock();
-        do_astar_pathfinding(this);
-        io_mutex.unlock();
-        //t1.detach();
+        std::thread t1(DvgSlam::do_astar_pathfinding, this);
+        //io_mutex.lock();
+        //do_astar_pathfinding(this);
+        //io_mutex.unlock();
+        t1.detach();
         
     }
     static void do_astar_pathfinding(DvgSlam* self){
