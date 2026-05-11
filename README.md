@@ -48,14 +48,14 @@ on newer ros2 versions.
 
 -   Build the package:
 
-        colcon build #or colcon build --packages-select online_mesh_mapper
+        colcon build #or colcon build --packages-select dvg_slam
 
 Running the package
 -------------------
 
 To start the node run the command:
 
-    ros2 launch online_mesh_mapper mapper_launch.py
+    ros2 launch dvg_slam mapper_launch.py
 
 Known issues
 ------------
