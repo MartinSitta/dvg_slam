@@ -280,56 +280,128 @@ class DvgSlam : public rclcpp::Node{
         return normal;
     }
     void raycast_delete(int64_t org_x, int64_t org_y, int64_t org_z,
-                    int64_t dest_x, int64_t dest_y, int64_t dest_z, bool splash_delete){
-        if(org_x == dest_x && org_y == dest_y && org_z == dest_z) return;
-        int64_t current_del_count = 0;
-        DoubleVector_t diff_vect{(double)(dest_x-org_x), (double)(dest_y-org_y), (double)(dest_z-org_z)};
-        double len2 = diff_vect.x*diff_vect.x + diff_vect.y*diff_vect.y + diff_vect.z*diff_vect.z;
-        int64_t max_deletions = (float) scalar * 0.1;
-        if(len2 < 1.0) return;
+                    int64_t dest_x, int64_t dest_y, int64_t dest_z,
+                    bool splash_delete,
+                    double max_range_meters)
+{
+    if(org_x == dest_x && org_y == dest_y && org_z == dest_z) return;
 
-        DoubleVector_t normal = double_vect_normalize(diff_vect);
-        int64_t travel_x = org_x, travel_y = org_y, travel_z = org_z;
-        uint32_t counter = 1;
-        uint32_t threshold = 0.4f * (float)scalar;
-        int64_t splash_diameter = (float)scalar * 0.15f;
-        if(splash_delete){
-            threshold = 2 * splash_diameter + threshold;
-        }
-        uint32_t max_iter = (uint32_t)std::ceil(std::sqrt(len2)) + 16;
-        while(counter < max_iter &&
-            get_euclidean_dist(travel_x, travel_y, travel_z, dest_x, dest_y, dest_z) > threshold){
+    DoubleVector_t diff_vect{
+        (double)(dest_x - org_x),
+        (double)(dest_y - org_y),
+        (double)(dest_z - org_z)
+    };
 
-            bool point_detected = voxel_graph_lookup(graph, travel_x, travel_y, travel_z);
-            if(current_del_count >=  max_deletions){
+    double len2 = diff_vect.x * diff_vect.x
+                + diff_vect.y * diff_vect.y
+                + diff_vect.z * diff_vect.z;
+
+    if(len2 < 1.0) return;
+
+    double ray_len = std::sqrt(len2);
+
+    // Convert max range from meters to your internal coordinate units.
+    double max_range_units = max_range_meters * (double)scalar;
+
+    // If the measured endpoint is closer than the clamp, use the real endpoint.
+    // Otherwise only travel up to the clamp.
+    double clamped_ray_len = std::min(ray_len, max_range_units);
+
+    if(clamped_ray_len < 1.0) return;
+
+    bool endpoint_inside_clamp = ray_len <= max_range_units;
+
+    DoubleVector_t normal = double_vect_normalize(diff_vect);
+
+    int64_t current_del_count = 0;
+    int64_t max_deletions = std::max<int64_t>(
+    1,
+    (int64_t)((float)scalar * 0.1f)
+    );
+    constexpr double DELETE_NORMAL_DOT_THRESHOLD = -0.2;
+    uint32_t counter = 1;
+
+    uint32_t threshold = 0.15f * (float)scalar;
+    int64_t splash_diameter = (float)scalar * 0.15f;
+
+    if(splash_delete){
+        threshold = splash_diameter + threshold;
+    }
+
+    double threshold2 = (double)threshold * (double)threshold;
+
+    uint32_t max_iter = (uint32_t)std::ceil(clamped_ray_len) + 1;
+
+    int64_t travel_x = std::lround(org_x + normal.x * counter);
+    int64_t travel_y = std::lround(org_y + normal.y * counter);
+    int64_t travel_z = std::lround(org_z + normal.z * counter);
+
+    while(counter < max_iter)
+    {
+        // Only use endpoint threshold if the real endpoint is inside the clamp.
+        // For far-away points, we do not care about the endpoint threshold,
+        // because the ray should stop at max_range_meters instead.
+        if(endpoint_inside_clamp){
+            double dx = (double)(travel_x - dest_x);
+            double dy = (double)(travel_y - dest_y);
+            double dz = (double)(travel_z - dest_z);
+
+            double dist2_to_dest = dx * dx + dy * dy + dz * dz;
+
+            if(dist2_to_dest <= threshold2){
                 return;
             }
-           if(point_detected){
-                DoubleVector_t voxel_normal = build_voxel_local_normal(normal, travel_x, travel_y, travel_z, 6);
-                double angle = voxel_normal.x * normal.x + voxel_normal.y * normal.y + voxel_normal.z * normal.z;
-                if(angle <= -0.6){
-                    if(splash_delete){
-                        for(int64_t splash_x = travel_x - (splash_diameter / 2);splash_x <= travel_x + (splash_diameter / 2); splash_x++){
-                            for(int64_t splash_y = travel_y - (splash_diameter / 2);splash_y <= travel_y + (splash_diameter / 2); splash_y++){
-                                for(int64_t splash_z = travel_z - (splash_diameter / 2);splash_z <= travel_z + (splash_diameter / 2); splash_z++){
-                                    voxel_graph_delete(graph, splash_x, splash_y, splash_z);
-                                }
+        }
+
+        bool point_detected = voxel_graph_lookup(graph, travel_x, travel_y, travel_z);
+
+        if(current_del_count >= max_deletions){
+            return;
+        }
+
+        if(point_detected){
+            DoubleVector_t voxel_normal =
+                build_voxel_local_normal(normal, travel_x, travel_y, travel_z, 6);
+
+            double angle = voxel_normal.x * normal.x
+                         + voxel_normal.y * normal.y
+                         + voxel_normal.z * normal.z;
+
+            if(angle <= DELETE_NORMAL_DOT_THRESHOLD){
+                if(splash_delete){
+                    for(int64_t splash_x = travel_x - (splash_diameter / 2);
+                        splash_x <= travel_x + (splash_diameter / 2);
+                        splash_x++)
+                    {
+                        for(int64_t splash_y = travel_y - (splash_diameter / 2);
+                            splash_y <= travel_y + (splash_diameter / 2);
+                            splash_y++)
+                        {
+                            for(int64_t splash_z = travel_z - (splash_diameter / 2);
+                                splash_z <= travel_z + (splash_diameter / 2);
+                                splash_z++)
+                            {
+                                voxel_graph_delete(graph, splash_x, splash_y, splash_z);
                             }
                         }
-                        return;
                     }
-                    else{
-                        current_del_count++;
-                        voxel_graph_delete(graph, travel_x, travel_y, travel_z);
-                    }
+
+                    return;
+                }
+                else{
+                    current_del_count++;
+                    voxel_graph_delete(graph, travel_x, travel_y, travel_z);
                 }
             }
-            counter++;
-            travel_x = std::lround(org_x + normal.x * counter);
-            travel_y = std::lround(org_y + normal.y * counter);
-            travel_z = std::lround(org_z + normal.z * counter);
         }
+
+        counter++;
+
+        travel_x = std::lround(org_x + normal.x * counter);
+        travel_y = std::lround(org_y + normal.y * counter);
+        travel_z = std::lround(org_z + normal.z * counter);
     }
+}
 
     int64_t get_manhattan_dist(int64_t org_x, int64_t org_y, int64_t org_z,
              int64_t dest_x, int64_t dest_y, int64_t dest_z){
@@ -2294,15 +2366,17 @@ class DvgSlam : public rclcpp::Node{
                 int64_t x = hashmap->slots[cnt].key.x;
                 int64_t y = hashmap->slots[cnt].key.y;
                 int64_t z = hashmap->slots[cnt].key.z;
+                /*
                 float x_dist = (float)x - (float)robot_point_x;
                 float y_dist = (float)y - (float)robot_point_y;
                 float z_dist = (float)z - (float)robot_point_z;
                 float x_dist_sq = x_dist * x_dist;
                 float y_dist_sq = y_dist * y_dist;
                 float z_dist_sq = z_dist * z_dist;
-                if(std::sqrt(x_dist_sq + y_dist_sq + z_dist_sq) < 5 * scalar){
-                    raycast_delete(robot_point_x, robot_point_y, robot_point_z, x, y, z, true);
-                }
+                */
+                //if(std::sqrt(x_dist_sq + y_dist_sq + z_dist_sq) < 5 * scalar){
+                raycast_delete(robot_point_x, robot_point_y, robot_point_z, x, y, z, true, 5);
+                //}
             }
         }
         /*
