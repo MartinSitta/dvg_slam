@@ -1,0 +1,12 @@
+#clangd setup
+.cache/
+.clangd/
+compile_commands.json
+
+#vscode configuration
+.vscode/
+
+#colcon outputs
+build/
+install/
+log/
