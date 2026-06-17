@@ -1,12 +1,13 @@
 #include <stdio.h>
-#include "Chunk.h"
+
+#include "PointSlot.h"
 #include "VoxelGraph.h"
 #include "HashUtils.h"
 #include "VoxelHashMap.h"
 #include "VoxelPriorityQueue.h"
 
 int main(){
-    printf("%ld\n", sizeof(GraphNode_t));
+
     printf("%ld\n", sizeof(AltChunk_t));
     VoxelGraph_t* graph = voxel_graph_init(1<<15);
     printf("graph chunk_array_size is %ld \n",(long) graph->chunk_amount);
@@ -15,16 +16,6 @@ int main(){
     printf("size of base graph is %ld\n", sizeof(*graph) + sizeof((graph->chunk_hash_table[0])) * graph->chunk_hash_table_size);
     printf("hash-test 1: %d\n", build_chunk_hash_table_hash(2354, 123, 4, 032540327));
 
-    uint16_t coords = build_vertex_coords(16, 16, 16);
-    printf("coords sanity check %d\n", coords);
-    printf("%d\n%d\n%d\n", vertex_pick_x_coord(coords), vertex_pick_y_coord(coords), vertex_pick_z_coord(coords));
-
-    printf("anchor coord sanity test\n");
-    printf("%ld\n", build_anchor_coord(32));
-    printf("%ld\n", build_anchor_coord(0));
-    printf("%ld\n", build_anchor_coord(-1));
-
-    printf("hash-test 2: %d\n", build_node_hash_table_hash(coords, 032540327));
     voxel_graph_insert(graph, 1, 1, 1);
     AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, 1, 1, 1);
     assert(graph->current_chunk_index == 1);
@@ -190,10 +181,38 @@ int main(){
 
     PointSlot_t* resize_sanity_check = voxel_hash_map_insert(hashmap, 2, 3, 4);
     assert(hashmap->capacity == 4);
+
+    PointSlot_t* post_resize_lookup = voxel_hash_map_lookup(hashmap, 1, 2, 3);
+    assert(post_resize_lookup != NULL);
+    assert(post_resize_lookup->state == SLOT_OCCUPIED);
+    assert(post_resize_lookup->key.x == 1);
+    assert(post_resize_lookup->key.y == 2);
+    assert(post_resize_lookup->key.z == 3);
+
     int64_t slots_occupied = hashmap->occupied_slot_count;
     PointSlot_t* resize_sanity_duplicate_insertion = voxel_hash_map_insert(hashmap, 1, 2, 3);
+    
     assert(resize_sanity_duplicate_insertion != NULL);
     assert(hashmap->occupied_slot_count == slots_occupied);
+
+    // Regression test: duplicate insertion must not trigger resize or increase occupied count.
+    int64_t capacity_before_duplicate = hashmap->capacity;
+    int64_t occupied_before_duplicate = hashmap->occupied_slot_count;
+    int64_t tombstones_before_duplicate = hashmap->tombstome_count;
+
+    PointSlot_t* duplicate_again = voxel_hash_map_insert(hashmap, 1, 2, 3);
+
+    assert(duplicate_again != NULL);
+    assert(duplicate_again->state == SLOT_OCCUPIED);
+    assert(duplicate_again->key.x == 1);
+    assert(duplicate_again->key.y == 2);
+    assert(duplicate_again->key.z == 3);
+
+    assert(hashmap->capacity == capacity_before_duplicate);
+    assert(hashmap->occupied_slot_count == occupied_before_duplicate);
+    assert(hashmap->tombstome_count == tombstones_before_duplicate);
+
+
     assert(voxel_hash_map_remove(hashmap, 1, 2, 3));
     int64_t dead_slots = 1;
     assert(slots_occupied - 1 == hashmap->occupied_slot_count);
@@ -220,13 +239,82 @@ int main(){
     slot4->astar_heuristic = 4.0;
     slot4->traveled_dist = 2.0;
     VoxelPriorityQueue_t* prio_queue = voxel_priority_queue_init(3);
-    voxel_priority_queue_enqueue(prio_queue, slot1);
-    voxel_priority_queue_enqueue(prio_queue, slot2);
-    voxel_priority_queue_enqueue(prio_queue, slot3);
-    voxel_priority_queue_enqueue(prio_queue, slot4);
-    assert(voxel_priority_queue_peek(prio_queue) == slot3);
+    Point_t p1 = slot1->key;
+    Point_t p2 = slot2->key;
+    Point_t p3 = slot3->key;
+    Point_t p4 = slot4->key;
+    voxel_priority_queue_enqueue(prio_queue, p1, hashmap);
+    voxel_priority_queue_enqueue(prio_queue, p2, hashmap);
+    voxel_priority_queue_enqueue(prio_queue, p3, hashmap);
+    voxel_priority_queue_enqueue(prio_queue, p4, hashmap);
+    assert(voxel_priority_queue_peek(prio_queue) != NULL);
+    assert(voxel_priority_queue_peek(prio_queue)->x == 3);
+    assert(voxel_priority_queue_peek(prio_queue)->y == 2);
+    assert(voxel_priority_queue_peek(prio_queue)->z == 3);
     voxel_priority_queue_free(prio_queue);
     voxel_hash_map_free(hashmap);
+
+
+    // Regression test: resize must preserve all existing keys.
+    VoxelHashMap_t* resize_test_map = voxel_hash_map_init(2, 10, 0.5);
+
+    PointSlot_t* a = voxel_hash_map_insert(resize_test_map, 1, 2, 3);
+    PointSlot_t* b = voxel_hash_map_insert(resize_test_map, 2, 3, 4);
+
+    assert(a != NULL);
+    assert(b != NULL);
+    assert(resize_test_map->occupied_slot_count == 2);
+
+    // Lookups must find both inserted keys and must not change occupied count.
+    int64_t occupied_before_lookup = resize_test_map->occupied_slot_count;
+
+    assert(voxel_hash_map_lookup(resize_test_map, 1, 2, 3) != NULL);
+    assert(voxel_hash_map_lookup(resize_test_map, 2, 3, 4) != NULL);
+
+    assert(resize_test_map->occupied_slot_count == occupied_before_lookup);
+
+    // Insert enough new unique points to force at least one resize.
+    int64_t capacity_before_resize = resize_test_map->capacity;
+
+    for(int64_t i = 10; resize_test_map->capacity == capacity_before_resize; i++){
+        PointSlot_t* inserted = voxel_hash_map_insert(resize_test_map, i, i + 1, i + 2);
+        assert(inserted != NULL);
+    }
+
+    assert(resize_test_map->capacity > capacity_before_resize);
+
+    // Old keys must still be findable after resize.
+    PointSlot_t* lookup_a = voxel_hash_map_lookup(resize_test_map, 1, 2, 3);
+    PointSlot_t* lookup_b = voxel_hash_map_lookup(resize_test_map, 2, 3, 4);
+
+    assert(lookup_a != NULL);
+    assert(lookup_b != NULL);
+
+    assert(lookup_a->key.x == 1);
+    assert(lookup_a->key.y == 2);
+    assert(lookup_a->key.z == 3);
+
+    assert(lookup_b->key.x == 2);
+    assert(lookup_b->key.y == 3);
+    assert(lookup_b->key.z == 4);
+
+    // Duplicate insertion after resize must not increase occupied count.
+    int64_t test_occupied_before_duplicate = resize_test_map->occupied_slot_count;
+    int64_t test_capacity_before_duplicate = resize_test_map->capacity;
+
+    PointSlot_t* duplicate_a = voxel_hash_map_insert(resize_test_map, 1, 2, 3);
+
+    assert(duplicate_a != NULL);
+    assert(duplicate_a->key.x == 1);
+    assert(duplicate_a->key.y == 2);
+    assert(duplicate_a->key.z == 3);
+
+    assert(resize_test_map->occupied_slot_count == test_occupied_before_duplicate);
+    assert(resize_test_map->capacity == test_capacity_before_duplicate);
+
+    voxel_hash_map_free(resize_test_map);
+
+
     printf("all hash map tests passed\n");
     return 0;
 }

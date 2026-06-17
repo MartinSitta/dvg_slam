@@ -107,6 +107,6 @@ DequeueRetObject_t voxel_priority_queue_dequeue(VoxelPriorityQueue_t* queue,
     return ret;
 }
 Point_t* voxel_priority_queue_peek(VoxelPriorityQueue_t* queue){
-    if(queue->current_element = 0) return NULL;
+    if(queue->current_element == 0) return NULL;
     return &queue->array[0];
 }

@@ -10,3 +10,6 @@ compile_commands.json
 build/
 install/
 log/
+
+#executable of regression test file
+lib/a.out
