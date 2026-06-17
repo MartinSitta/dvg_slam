@@ -9,6 +9,7 @@ extern "C"{
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include "FibonacciHash.h"
 #include "HashUtils.h"
 #include "PointSlot.h"

@@ -4,8 +4,6 @@
 #ifdef __cplusplus
 extern "C"{
 #endif
-
-#include "Chunk.h"
 #include "AltChunk.h"
 #include <stdlib.h>
 #include <assert.h>

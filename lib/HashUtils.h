@@ -8,7 +8,6 @@ extern "C"{
 #include "murmur3.h"
 #include <stdint.h>
 #include <assert.h>
-#include "Vertex.h"
 #include "FibonacciHash.h"
 uint32_t build_chunk_hash_table_hash(int64_t x, int64_t y, int64_t z, uint32_t seed);
 uint64_t build_hash_map_hash(int64_t x, int64_t y, int64_t z, uint32_t seed);
