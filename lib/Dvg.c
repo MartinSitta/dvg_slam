@@ -1,0 +1,419 @@
+#include "Dvg.h"
+#include "Chunk.h"
+#include "ChunkBitmap.h"
+#include <assert.h>
+#include <stdio.h>
+//helper functions
+void dvg_init_arrays(Dvg_t* graph){
+    for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
+        graph->chunk_hash_table[i] = NULL;
+    }
+}
+void splash_insert_inflation(Dvg_t* graph, int64_t x, int64_t y, int64_t z, int64_t inflation_x_y, int64_t infation_z){
+    int64_t horizontal_travel_dist = inflation_x_y / 2;
+    int64_t vertical_travel_dist = infation_z / 2;
+    for(int64_t moving_x = x - horizontal_travel_dist; moving_x < x + horizontal_travel_dist; moving_x++){
+        for(int64_t moving_y = y - horizontal_travel_dist; moving_y < y +  horizontal_travel_dist; moving_y++){
+            for(int64_t moving_z = z - vertical_travel_dist; moving_z < z + vertical_travel_dist; moving_z++){
+                dvg_insert_inflation(graph, moving_x, moving_y, moving_z);
+            }
+        }
+    }
+}
+//end helpers
+Dvg_t* dvg_init(uint32_t chunk_count){
+    assert(chunk_count > 0);
+    assert((chunk_count & (chunk_count - 1)) == 0);
+    uint32_t chunk_amount = chunk_count;
+    uint32_t chunk_hash_table_size = chunk_count * 2;
+    Dvg_t* output = malloc(sizeof(Dvg_t));
+    output->chunk_amount = chunk_count;
+    output->current_chunk_index = 0;
+    output->total_hash_table_insertions = 0;
+    output->total_hash_collisions = 0;
+    if(((chunk_hash_table_size) & (chunk_hash_table_size - 1)) != 0){
+        bool val_found = false;
+        for(uint32_t i = 1; (i < (i << 31)) && !val_found; i = i << 1){
+            if(i > chunk_hash_table_size){
+                chunk_hash_table_size = i;
+                val_found = true;
+            }
+        }
+
+    }
+    output->chunk_hash_table = malloc(sizeof(Chunk_t*) * chunk_hash_table_size);
+    assert(output->chunk_hash_table != NULL);
+    output->chunk_hash_table_size = chunk_hash_table_size;
+    printf("chunk hashtable size is %d\n", output->chunk_hash_table_size);
+    assert(output->chunk_hash_table_size > output->chunk_amount);
+    dvg_init_arrays(output);
+    return output;
+}
+uint8_t dvg_lookup(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
+        return false;
+    }
+    return chunk_lookup(chunk, x, y, z);
+}
+
+bool dvg_lookup_inflation(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
+        return false;
+    }
+    return chunk_lookup_inflation(chunk, x, y, z);
+}
+
+//DO NOT USE
+/*
+Vertex_t* voxel_graph_get_vertex(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+    assert(graph != NULL);
+    Chunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
+        return NULL;
+    }
+    assert(build_anchor_coord(x) == chunk->x_offset);                           
+    assert(build_anchor_coord(y) == chunk->y_offset);                           
+    assert(build_anchor_coord(z) == chunk->z_offset);
+    
+    int16_t rel_x = x - chunk->x_offset;                                        
+    int16_t rel_y = y - chunk->y_offset;                                        
+    int16_t rel_z = z - chunk->z_offset;                                        
+    
+    uint16_t node_coords = build_vertex_coords((uint8_t) rel_x, (uint8_t) rel_y, (uint8_t) rel_z);
+    int64_t node_index = chunk_node_lookup(chunk, node_coords);
+    if(node_index == -1){
+        return NULL;
+    }
+    Vertex_t* out_ptr = &chunk->nodes[node_index].coord_and_mesh_info;
+    assert(out_ptr->vertex_coords == node_coords);
+    return out_ptr;
+}
+*/
+bool dvg_insert(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    assert(graph != NULL);
+    //printf("performing hash table lookup\n");
+    Chunk_t* chunk = dvg_chunk_hash_table_request(graph, x, y, z);
+    if(chunk == NULL){
+        return false;
+    }
+    assert(graph->current_chunk_index < graph->chunk_amount);
+    if(graph->current_chunk_index >= graph->chunk_amount){
+        return false;
+    }
+    assert(chunk->x_offset == chunk_build_anchor_coord(x));
+    assert(chunk->y_offset == chunk_build_anchor_coord(y));
+    assert(chunk->z_offset == chunk_build_anchor_coord(z));
+    //printf("performing chunk_insertion\n");
+    chunk_insert(chunk,x, y, z);
+    //if(ret_val){
+    //    voxel_graph_enter_neighbours(graph, x, y, z);
+    //}
+    return true;
+}
+
+bool dvg_insert_inflation(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    assert(graph != NULL);
+    //printf("performing hash table lookup\n");
+    Chunk_t* chunk = dvg_chunk_hash_table_request(graph, x, y, z);
+    if(chunk == NULL){
+        return false;
+    }
+    assert(graph->current_chunk_index < graph->chunk_amount);
+    if(graph->current_chunk_index >= graph->chunk_amount){
+        return false;
+    }
+    assert(chunk->x_offset == chunk_build_anchor_coord(x));
+    assert(chunk->y_offset == chunk_build_anchor_coord(y));
+    assert(chunk->z_offset == chunk_build_anchor_coord(z));
+    //printf("performing chunk_insertion\n");
+    chunk_insert_inflation(chunk,x, y, z);
+    //if(ret_val){
+    //    voxel_graph_enter_neighbours(graph, x, y, z);
+    //}
+    return true;
+}
+
+
+
+bool dvg_delete(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    assert(graph != NULL);
+    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
+        return false;
+    }
+    assert(chunk->x_offset == chunk_build_anchor_coord(x));
+    assert(chunk->y_offset == chunk_build_anchor_coord(y));
+    assert(chunk->z_offset == chunk_build_anchor_coord(z));
+    chunk_delete(chunk,x, y, z);
+    //if(ret_val){
+    //    voxel_graph_delete_neighbours(graph, x, y, z);
+    //}
+    return true;
+}
+
+bool dvg_delete_inflation(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    assert(graph != NULL);
+    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
+    if(chunk == NULL){
+        return false;
+    }
+    assert(chunk->x_offset == chunk_build_anchor_coord(x));
+    assert(chunk->y_offset == chunk_build_anchor_coord(y));
+    assert(chunk->z_offset == chunk_build_anchor_coord(z));
+    chunk_delete_inflation(chunk,x, y, z);
+    //if(ret_val){
+    //    voxel_graph_delete_neighbours(graph, x, y, z);
+    //}
+    return true;
+}
+
+Chunk_t* dvg_chunk_hash_table_lookup(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    int64_t chunk_anchor_x = chunk_build_anchor_coord(x);
+    int64_t chunk_anchor_y = chunk_build_anchor_coord(y);
+    int64_t chunk_anchor_z = chunk_build_anchor_coord(z);
+    //printf("building hash\n");
+    //uint64_t hash =  build_chunk_hash_table_hash(chunk_anchor_x, chunk_anchor_y, chunk_anchor_z, 1586102333);//murmur implementation
+    uint64_t hash = build_fibonacci_hash_from_coords(chunk_anchor_x, chunk_anchor_y, chunk_anchor_z);//fibonacci implementation
+    uint64_t hash_table_entry = hash & (graph->chunk_hash_table_size - 1);
+    assert(hash_table_entry < graph->chunk_hash_table_size);
+    //printf("building double_hash\n");
+    uint64_t double_hash = 0;
+    uint64_t base_double_hash = fibonacci_doublehash(hash);//fibonacci implementation
+    //uint64_t base_double_hash = build_chunk_hash_table_hash(chunk_anchor_x, chunk_anchor_y, chunk_anchor_z, 2734158491);//murmur implementation
+    //printf("performing double hash hashtable lookups\n");
+    for(uint32_t i = 0; i < 10; i++){
+        double_hash = (hash + (i * base_double_hash)) % graph->chunk_hash_table_size;
+        assert(double_hash < graph->chunk_hash_table_size);
+        if(graph->chunk_hash_table[double_hash] == NULL){
+            return NULL;
+        }
+        else{
+            Chunk_t* chunk = graph->chunk_hash_table[double_hash]; 
+            if(chunk->x_offset == chunk_anchor_x &&
+                    chunk->y_offset == chunk_anchor_y &&
+                    chunk->z_offset == chunk_anchor_z){
+                return chunk;
+            }
+        }
+    }
+    return NULL;
+}
+Chunk_t* dvg_chunk_hash_table_request(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    int64_t chunk_anchor_x = chunk_build_anchor_coord(x);
+    int64_t chunk_anchor_y = chunk_build_anchor_coord(y);
+    int64_t chunk_anchor_z = chunk_build_anchor_coord(z);
+    //printf("building hash\n");
+    //uint64_t hash =  build_chunk_hash_table_hash(chunk_anchor_x, chunk_anchor_y, chunk_anchor_z, 1586102333);//murmur implementation
+    uint64_t hash = build_fibonacci_hash_from_coords(chunk_anchor_x, chunk_anchor_y, chunk_anchor_z);//fibonacci implementation
+    uint64_t hash_table_entry = hash & (graph->chunk_hash_table_size - 1);
+    assert(hash_table_entry < graph->chunk_hash_table_size);
+    bool prev_hash_collision = false;
+    //printf("performing intial hashtable lookup\n");
+    if(graph->chunk_hash_table[hash_table_entry] == NULL){
+        Chunk_t* chunk = dvg_create_chunk(graph, x, y, z);
+        if(chunk == NULL){
+            return NULL;
+        }
+        graph->chunk_hash_table[hash_table_entry] = chunk;
+        graph->total_hash_table_insertions++;
+        return chunk;
+    }
+    else{
+        //printf("building double_hash\n");
+        uint64_t double_hash = 0;
+        uint64_t base_double_hash = fibonacci_doublehash(hash);//fibonacci implementation
+        //uint64_t base_double_hash = build_chunk_hash_table_hash(chunk_anchor_x, chunk_anchor_y, chunk_anchor_z, 2734158491);//murmur implementation
+        //printf("performing double hash hashtable lookups\n");
+        for(uint32_t i = 0; i < 10; i++){
+            double_hash = (hash + (i * base_double_hash)) % graph->chunk_hash_table_size;
+            if(graph->chunk_hash_table[double_hash] == NULL){
+                Chunk_t* chunk = dvg_create_chunk(graph, x, y, z);
+                if(chunk == NULL){
+                    return NULL;
+                }
+                graph->chunk_hash_table[double_hash] = chunk;
+                graph->total_hash_table_insertions++;
+                if(prev_hash_collision){
+                    graph->total_hash_collisions++;
+                }
+                return chunk;
+            }
+            else{
+                Chunk_t* chunk = graph->chunk_hash_table[double_hash]; 
+                if(chunk->x_offset == chunk_anchor_x &&
+                        chunk->y_offset == chunk_anchor_y &&
+                        chunk->z_offset == chunk_anchor_z){
+                    return chunk;
+                }
+                else{
+                    prev_hash_collision = true;
+                }
+            }
+        }
+        
+    return NULL;
+    }
+}
+Chunk_t* dvg_create_chunk(Dvg_t* graph, int64_t x, int64_t y, int64_t z){
+    assert(graph != NULL);
+    if(graph == NULL){
+        return NULL;
+    }
+    if(graph->current_chunk_index >= graph->chunk_amount){
+        return NULL;
+    }
+    Chunk_t* chunk = malloc(sizeof(Chunk_t));
+    if(chunk == NULL){
+        return NULL;
+    }
+    chunk_init(chunk);
+    chunk->x_offset = chunk_build_anchor_coord(x);
+    chunk->y_offset = chunk_build_anchor_coord(y);
+    chunk->z_offset = chunk_build_anchor_coord(z);
+    graph->current_chunk_index++;
+    return chunk;
+}
+//DO NOT USE
+/*
+void voxel_graph_enter_neighbours(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+    Vertex_t* org_vertex = voxel_graph_get_vertex(graph, x, y, z);
+
+    Vertex_t* upper_vertex = voxel_graph_get_vertex(graph, x, y, z + 1);            
+    Vertex_t* lower_vertex = voxel_graph_get_vertex(graph, x, y, z - 1);            
+    Vertex_t* left_vertex = voxel_graph_get_vertex(graph, x, y + 1, z);             
+    Vertex_t* right_vertex = voxel_graph_get_vertex(graph, x, y - 1, z);            
+    Vertex_t* foward_vertex = voxel_graph_get_vertex(graph, x + 1, y, z);            
+    Vertex_t* back_vertex = voxel_graph_get_vertex(graph, x - 1, y, z);
+
+    assert(org_vertex != NULL);                                                 
+    if(upper_vertex != NULL){
+        if(!vertex_get_dead_bit(upper_vertex)){
+            vertex_set_up_bit(org_vertex);
+            vertex_set_down_bit(upper_vertex);
+        }
+    }
+    if(lower_vertex != NULL){                                                   
+        if(!vertex_get_dead_bit(lower_vertex)){
+            vertex_set_down_bit(org_vertex);
+            vertex_set_up_bit(lower_vertex);
+        }
+    }                                                                           
+    if(left_vertex != NULL){                                                    
+        if(!vertex_get_dead_bit(left_vertex)){
+            vertex_set_left_bit(org_vertex);
+            vertex_set_right_bit(left_vertex);
+        }
+    }                                                                           
+    if(right_vertex != NULL){                                                   
+        if(!vertex_get_dead_bit(right_vertex)){
+            vertex_set_right_bit(org_vertex);
+            vertex_set_left_bit(right_vertex);
+        }
+    }                                                                           
+    if(foward_vertex != NULL){                                                  
+        if(!vertex_get_dead_bit(foward_vertex)){
+            vertex_set_foward_bit(org_vertex);
+            vertex_set_back_bit(foward_vertex);
+        }
+    }                                                                           
+    if(back_vertex != NULL){                                                    
+        if(!vertex_get_dead_bit(back_vertex)){
+            vertex_set_back_bit(org_vertex);
+            vertex_set_foward_bit(back_vertex);
+        }
+    }                
+}
+*/
+//DO NOT USE
+/*
+void voxel_graph_delete_neighbours(VoxelGraph_t* graph, int64_t x, int64_t y, int64_t z){
+    Vertex_t* org_vertex = voxel_graph_get_vertex(graph, x, y, z);
+    Vertex_t* upper_vertex = voxel_graph_get_vertex(graph, x, y, z + 1);
+    Vertex_t* lower_vertex = voxel_graph_get_vertex(graph, x, y, z - 1);
+    Vertex_t* left_vertex = voxel_graph_get_vertex(graph, x, y + 1, z);
+    Vertex_t* right_vertex = voxel_graph_get_vertex(graph, x, y - 1, z);
+    Vertex_t* foward_vertex = voxel_graph_get_vertex(graph, x + 1, y, z);            
+    Vertex_t* back_vertex = voxel_graph_get_vertex(graph, x - 1, y, z);            
+    assert(org_vertex != NULL);
+    if(upper_vertex != NULL){
+        vertex_clear_up_bit(org_vertex);
+        vertex_clear_down_bit(upper_vertex);
+        assert(!vertex_get_up_bit(org_vertex));
+        assert(!vertex_get_down_bit(upper_vertex));
+    }
+    if(lower_vertex != NULL){
+        vertex_clear_down_bit(org_vertex);
+        vertex_clear_up_bit(lower_vertex);
+        assert(!vertex_get_down_bit(org_vertex));
+        assert(!vertex_get_up_bit(lower_vertex));
+    }
+    if(left_vertex != NULL){
+        vertex_clear_left_bit(org_vertex);
+        vertex_clear_right_bit(left_vertex);
+        assert(!vertex_get_left_bit(org_vertex));
+        assert(!vertex_get_right_bit(left_vertex));
+    }
+    if(right_vertex != NULL){
+        vertex_clear_right_bit(org_vertex);
+        vertex_clear_left_bit(right_vertex);
+        assert(!vertex_get_right_bit(org_vertex));
+        assert(!vertex_get_left_bit(right_vertex));
+    }
+    if(foward_vertex != NULL){
+        vertex_clear_foward_bit(org_vertex);
+        vertex_clear_back_bit(foward_vertex);
+        assert(!vertex_get_foward_bit(org_vertex));
+        assert(!vertex_get_back_bit(foward_vertex));
+    }
+    if(back_vertex != NULL){
+        vertex_clear_back_bit(org_vertex);
+        vertex_clear_foward_bit(back_vertex);
+        assert(!vertex_get_back_bit(org_vertex));
+        assert(!vertex_get_foward_bit(back_vertex));
+    }
+
+}
+*/
+void dvg_free(Dvg_t** graph){
+    for(uint32_t i = 0; i < (*graph)->chunk_hash_table_size; i++){
+        if((*graph)->chunk_hash_table[i] != NULL){
+            chunk_free_inflation((*graph)->chunk_hash_table[i]);
+            free((*graph)->chunk_hash_table[i]);
+            (*graph)->chunk_hash_table[i] = NULL;
+        }
+    }
+    free((*graph)->chunk_hash_table);
+    free(*graph);
+    *graph = NULL;
+}
+
+void dvg_build_inflation(Dvg_t* graph, int64_t inflation_x_y, int64_t inflation_z){
+    for(uint64_t chunk_index = 0; chunk_index < graph->chunk_hash_table_size; chunk_index++){
+        Chunk_t* chunk = graph->chunk_hash_table[chunk_index];
+        if(chunk == NULL){
+            continue;
+        }
+        if(chunk->change_occurred){
+            if(chunk->inflation != NULL){
+                *chunk->inflation = chunk_bitmap_init();
+            }
+            for(int64_t x = chunk->x_offset; x < chunk->x_offset + ALT_CHUNK_LEN; x++){
+                for(int64_t y = chunk->y_offset; y < chunk->y_offset + ALT_CHUNK_LEN; y++){
+                    for(int64_t z = chunk->z_offset; z < chunk->z_offset + ALT_CHUNK_LEN; z++){
+                        if(dvg_lookup(graph, x, y, z) >= 2){
+                            splash_insert_inflation(graph, x, y, z, inflation_x_y, inflation_z);
+                        }
+                    }
+                }
+            }
+            chunk->change_occurred = false;
+        }
+    }
+}
+
+
+
+
+
