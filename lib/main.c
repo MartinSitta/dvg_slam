@@ -1,31 +1,31 @@
 #include <stdio.h>
 
 #include "PointSlot.h"
-#include "VoxelGraph.h"
+#include "Dvg.h"
 #include "HashUtils.h"
 #include "VoxelHashMap.h"
 #include "VoxelPriorityQueue.h"
 
 int main(){
 
-    printf("%ld\n", sizeof(AltChunk_t));
-    VoxelGraph_t* graph = voxel_graph_init(1<<15);
+    printf("%ld\n", sizeof(Chunk_t));
+    Dvg_t* graph = dvg_init(1<<15);
     printf("graph chunk_array_size is %ld \n",(long) graph->chunk_amount);
     
     printf("graph chunk_hash_table_size is %ld \n", (long) graph->chunk_hash_table_size);
     printf("size of base graph is %ld\n", sizeof(*graph) + sizeof((graph->chunk_hash_table[0])) * graph->chunk_hash_table_size);
     printf("hash-test 1: %d\n", build_chunk_hash_table_hash(2354, 123, 4, 032540327));
 
-    voxel_graph_insert(graph, 1, 1, 1);
-    AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, 1, 1, 1);
+    dvg_insert(graph, 1, 1, 1);
+    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, 1, 1, 1);
     assert(graph->current_chunk_index == 1);
     assert(chunk->x_offset == 0);
     assert(chunk->y_offset == 0);
     assert(chunk->z_offset == 0);
     //assert(chunk->current_node_index == 1);
     //assert(chunk->nodes[0].coord_and_mesh_info.vertex_coords != 0);
-    assert(alt_chunk_lookup(chunk, 1, 1, 1));
-    voxel_graph_insert(graph, 2, 2, 2);
+    assert(chunk_lookup(chunk, 1, 1, 1));
+    dvg_insert(graph, 2, 2, 2);
     assert(graph->current_chunk_index == 1);
     assert(chunk->x_offset == 0);
     assert(chunk->y_offset == 0);
@@ -33,8 +33,8 @@ int main(){
     assert(chunk->change_occurred == true);
     //assert(chunk->current_node_index == 2);
     //assert(chunk->nodes[1].coord_and_mesh_info.vertex_coords != 0);
-    assert(alt_chunk_lookup(chunk, 2, 2, 2));
-    voxel_graph_insert(graph, 2, 2, 2);
+    assert(chunk_lookup(chunk, 2, 2, 2));
+    dvg_insert(graph, 2, 2, 2);
     assert(graph->current_chunk_index == 1);
     assert(chunk->x_offset == 0);
     assert(chunk->y_offset == 0);
@@ -42,8 +42,8 @@ int main(){
     //assert(chunk->current_node_index == 2);
 
     printf("testing chunk insertion with negative coords\n");
-    voxel_graph_insert(graph, 2, -1, 2);
-    AltChunk_t* chunk_two = voxel_graph_chunk_hash_table_lookup(graph, 2, -1, 2);
+    dvg_insert(graph, 2, -1, 2);
+    Chunk_t* chunk_two = dvg_chunk_hash_table_lookup(graph, 2, -1, 2);
     assert(graph->current_chunk_index == 2);
     assert(chunk_two->x_offset == 0);
     assert(chunk_two->y_offset == -16);
@@ -51,7 +51,7 @@ int main(){
     //assert(chunk_two->current_node_index == 1);
 
     printf("depricated test: neighbour connection sanity check:\n");
-    voxel_graph_insert(graph, 1, 1, 2);
+    dvg_insert(graph, 1, 1, 2);
     assert(graph->current_chunk_index == 2);
     assert(chunk->x_offset == 0);
     assert(chunk->y_offset == 0);
@@ -60,8 +60,8 @@ int main(){
     //assert(chunk->nodes[2].coord_and_mesh_info.buf[2] != 0);
     //assert(chunk->nodes[0].coord_and_mesh_info.buf[2] != 0);
     //for debugging
-    voxel_graph_insert(graph, -9, -32, 12);
-    voxel_graph_insert(graph,167, 82 ,-1);
+    dvg_insert(graph, -9, -32, 12);
+    dvg_insert(graph,167, 82 ,-1);
 
     printf("inserting every node in chunk\n");
 
@@ -69,7 +69,7 @@ int main(){
         for(int y = 32; y < 48; y++){
             for(int z = 32; z < 48; z++){
                 printf("inserting %d %d %d\n", x, y, z);
-                voxel_graph_insert(graph, x,y,z);
+                dvg_insert(graph, x,y,z);
             }
         }
     }
@@ -77,7 +77,7 @@ int main(){
     for(int x = 32; x < 48; x++){
         for(int y = 32; y < 48; y++){
             for(int z = 32; z < 48; z++){
-                assert(voxel_graph_lookup(graph, x,y,z) == 2);
+                assert(dvg_lookup(graph, x,y,z) == 2);
             }
         }
     }
@@ -87,7 +87,7 @@ int main(){
         for(int y = 32; y < 48; y++){
             for(int z = 32; z < 48; z++){
                 printf("deleting %d %d %d\n", x, y, z);
-                voxel_graph_delete(graph, x,y,z);
+                dvg_delete(graph, x,y,z);
             }
         }
     }
@@ -95,20 +95,20 @@ int main(){
     for(int x = 32; x < 48; x++){
         for(int y = 32; y < 48; y++){
             for(int z = 32; z < 48; z++){
-                assert(voxel_graph_lookup(graph, x,y,z) == 1);
+                assert(dvg_lookup(graph, x,y,z) == 1);
             }
         }
     }
 
-    voxel_graph_delete(graph, -10, -18, 0);
-    voxel_graph_delete(graph, -10, -18, 1);
-    voxel_graph_insert(graph, -9, -18, 0);
+    dvg_delete(graph, -10, -18, 0);
+    dvg_delete(graph, -10, -18, 1);
+    dvg_insert(graph, -9, -18, 0);
 
     //printf("depricated test: neighbour connection and disconnection check:\n");
-    //voxel_graph_insert(graph, 1, 1, 2);
-    //voxel_graph_insert(graph, 1, 2, 1);
-    //voxel_graph_insert(graph, 2, 1, 1);
-    //voxel_graph_delete(graph, 1, 1, 1);
+    //dvg_insert(graph, 1, 1, 2);
+    //dvg_insert(graph, 1, 2, 1);
+    //dvg_insert(graph, 2, 1, 1);
+    //dvg_delete(graph, 1, 1, 1);
     /*
     uint16_t test_coord_center = build_vertex_coords(1, 1, 1);
     uint16_t test_coord_above = build_vertex_coords(1, 1, 2);
@@ -125,7 +125,7 @@ int main(){
     assert(!vertex_get_right_bit(&chunk->nodes[test_index_left].coord_and_mesh_info));
     assert(!vertex_get_back_bit(&chunk->nodes[test_index_ahead].coord_and_mesh_info));
     
-    voxel_graph_insert(graph, 1, 1, 1);
+    dvg_insert(graph, 1, 1, 1);
 
     assert(vertex_get_down_bit(&chunk->nodes[test_index_above].coord_and_mesh_info));
     assert(vertex_get_right_bit(&chunk->nodes[test_index_left].coord_and_mesh_info));
@@ -136,9 +136,9 @@ int main(){
     assert(vertex_get_foward_bit(&chunk->nodes[test_index_center].coord_and_mesh_info));
     assert(!vertex_get_dead_bit(&chunk->nodes[test_index_center].coord_and_mesh_info));
 
-    voxel_graph_insert(graph, 31, 0, 0);
-    voxel_graph_insert(graph, 32, 0, 0);
-    AltChunk_t* chunk_three = voxel_graph_chunk_hash_table_lookup(graph, 32, 0, 0);
+    dvg_insert(graph, 31, 0, 0);
+    dvg_insert(graph, 32, 0, 0);
+    Chunk_t* chunk_three = dvg_chunk_hash_table_lookup(graph, 32, 0, 0);
     uint16_t test_chunk_border = build_vertex_coords(31, 0, 0);
     uint16_t test_chunk_border_2 = build_vertex_coords(0, 0, 0);
     int64_t chunk_node_index_2 = chunk_node_lookup(chunk_three, test_chunk_border_2);
@@ -147,23 +147,23 @@ int main(){
     assert(vertex_get_foward_bit(&chunk->nodes[chunk_node_index_1].coord_and_mesh_info));
     assert(vertex_get_back_bit(&chunk_three->nodes[chunk_node_index_2].coord_and_mesh_info));
 
-    voxel_graph_delete(graph, 31, 0, 0);
+    dvg_delete(graph, 31, 0, 0);
 
     assert(!vertex_get_foward_bit(&chunk->nodes[chunk_node_index_1].coord_and_mesh_info));
     assert(!vertex_get_back_bit(&chunk_three->nodes[chunk_node_index_2].coord_and_mesh_info));
     */
     printf("performing inflation tests\n");
-    voxel_graph_build_inflation(graph, 3, 3);
+    dvg_build_inflation(graph, 3, 3);
     assert(chunk->change_occurred == false);
-    assert(voxel_graph_lookup_inflation(graph,1,1,1));
-    assert(voxel_graph_lookup_inflation(graph,0,0,0));
-    assert(voxel_graph_lookup_inflation(graph,2,2,2));
-    assert(!voxel_graph_lookup_inflation(graph,1,1,3));
+    assert(dvg_lookup_inflation(graph,1,1,1));
+    assert(dvg_lookup_inflation(graph,0,0,0));
+    assert(dvg_lookup_inflation(graph,2,2,2));
+    assert(!dvg_lookup_inflation(graph,1,1,3));
     printf("inflation tests passed!\n");
     printf("checking hashing metrics logic\n");
     assert(graph->total_hash_table_insertions != graph->total_hash_collisions);
     printf("%ld insertions have been performed, %ld hash collosions have occurred\n", graph->total_hash_table_insertions, graph->total_hash_collisions);
-    voxel_graph_free(&graph);
+    dvg_free(&graph);
     printf("all voxelgraph tests passed\n");
 
     printf("initiaing hashmap tests:\n");

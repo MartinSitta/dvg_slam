@@ -32,8 +32,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     DEPENDENCIES nav_msgs std_msgs
     )
 add_library(lib_map_model STATIC lib/HashUtils.c
-    lib/murmur3.c lib/VoxelGraph.c lib/AltChunk.c
-    lib/FibonacciHash.c lib/AltGraphBitMap.c lib/VoxelHashMap.c lib/VoxelPriorityQueue.c)     
+    lib/murmur3.c lib/Dvg.c lib/Chunk.c
+    lib/FibonacciHash.c lib/ChunkBitmap.c lib/VoxelHashMap.c lib/VoxelPriorityQueue.c)     
 add_executable(dvg_slam_node src/dvg_slam.cpp)
 target_include_directories(dvg_slam_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

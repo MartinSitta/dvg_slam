@@ -31,7 +31,7 @@
 #include <pcl/registration/icp.h>
 #include <pcl/filters/random_sample.h>
 #include <pcl/filters/filter.h>
-#include "../lib/VoxelGraph.h"
+#include "../lib/Dvg.h"
 #include "../lib/VoxelHashMap.h"
 #include "../lib/VoxelPriorityQueue.h"
 #include "mesh_msgs/msg/mesh_geometry_stamped.hpp"
@@ -221,7 +221,7 @@ class DvgSlam : public rclcpp::Node{
         rclcpp::sleep_for(std::chrono::milliseconds(500));
         last_processed_pointcloud_msg = std::chrono::steady_clock::now();
         RCLCPP_INFO(this->get_logger(), "starting the mapper\n");
-        graph = voxel_graph_init(this->chunk_amount);
+        graph = dvg_init(this->chunk_amount);
         assert(graph != NULL);
         RCLCPP_INFO(this->get_logger(), "node initialized\n");
     }
@@ -243,7 +243,7 @@ class DvgSlam : public rclcpp::Node{
         }
         RCLCPP_WARN(this->get_logger(), "Deleting the map model\n");
         RCLCPP_WARN(this->get_logger(), "Out of %ld hashtable entries, there were %ld hash collisions\n", graph->total_hash_table_insertions, graph->total_hash_collisions);
-        voxel_graph_free(&graph);
+        dvg_free(&graph);
     }
   private:
         void debug_map_pose_callback(){
@@ -261,7 +261,7 @@ class DvgSlam : public rclcpp::Node{
             for(int64_t y_offset = -radius; y_offset <= radius; y_offset++){
                 for(int64_t z_offset = -radius; z_offset <= radius; z_offset++){
                     if(x_offset * x_offset + y_offset * y_offset + z_offset * z_offset < radius * radius){
-                        if(voxel_graph_lookup(graph, voxel_x + x_offset, voxel_y + y_offset, voxel_z + z_offset) >= 2){
+                        if(dvg_lookup(graph, voxel_x + x_offset, voxel_y + y_offset, voxel_z + z_offset) >= 2){
                             cumulative_vect.x += x_offset;
                             cumulative_vect.y += y_offset;
                             cumulative_vect.z += z_offset;
@@ -351,7 +351,7 @@ class DvgSlam : public rclcpp::Node{
                 }
             }
 
-            bool point_detected = voxel_graph_lookup(graph, travel_x, travel_y, travel_z);
+            bool point_detected = dvg_lookup(graph, travel_x, travel_y, travel_z);
 
             if(current_del_count >= max_deletions){
                 return;
@@ -370,7 +370,7 @@ class DvgSlam : public rclcpp::Node{
                         for(int64_t sx = travel_x - splash_radius; sx <= travel_x + splash_radius; sx++){
                             for(int64_t sy = travel_y - splash_radius; sy <= travel_y + splash_radius; sy++){
                                 for(int64_t sz = travel_z - splash_radius; sz <= travel_z + splash_radius; sz++){
-                                    voxel_graph_delete(graph, sx, sy, sz);
+                                    dvg_delete(graph, sx, sy, sz);
                                 }
                             }
                         }
@@ -378,7 +378,7 @@ class DvgSlam : public rclcpp::Node{
                     }
                     else{
                         current_del_count++;
-                        voxel_graph_delete(graph, travel_x, travel_y, travel_z);
+                        dvg_delete(graph, travel_x, travel_y, travel_z);
                     }
                 }
             }
@@ -951,7 +951,7 @@ class DvgSlam : public rclcpp::Node{
             out_mesh->faces.push_back(out_face2);
         }
     }
-    ChunkMesh_t gen_chunk_mesh_with_greedy_mesher(VoxelGraph_t* graph, AltChunk_t* chunk, bool wavefront){   
+    ChunkMesh_t gen_chunk_mesh_with_greedy_mesher(Dvg_t* graph, Chunk_t* chunk, bool wavefront){   
         ChunkMesh_t output;
         std::vector<InFace_t> in_faces;
         std::vector<InVertex_t> in_vertices;
@@ -960,12 +960,12 @@ class DvgSlam : public rclcpp::Node{
         int64_t base_x = chunk->x_offset;
         int64_t base_y = chunk->y_offset;
         int64_t base_z = chunk->z_offset;
-        AltChunk_t* upper_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y, base_z + ALT_CHUNK_LEN);
-        AltChunk_t* lower_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y, base_z - ALT_CHUNK_LEN);
-        AltChunk_t* left_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y + ALT_CHUNK_LEN, base_z);
-        AltChunk_t* right_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y - ALT_CHUNK_LEN, base_z);
-        AltChunk_t* foward_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x + ALT_CHUNK_LEN, base_y, base_z);
-        AltChunk_t* back_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x - ALT_CHUNK_LEN, base_y, base_z);
+        Chunk_t* upper_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y, base_z + ALT_CHUNK_LEN);
+        Chunk_t* lower_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y, base_z - ALT_CHUNK_LEN);
+        Chunk_t* left_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y + ALT_CHUNK_LEN, base_z);
+        Chunk_t* right_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y - ALT_CHUNK_LEN, base_z);
+        Chunk_t* foward_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x + ALT_CHUNK_LEN, base_y, base_z);
+        Chunk_t* back_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x - ALT_CHUNK_LEN, base_y, base_z);
         for(int64_t moving_x = 0; moving_x < 16; moving_x++){
             for(int64_t moving_y = 0; moving_y < 16; moving_y++){
                 for(int64_t moving_z = 0; moving_z < 16; moving_z++){
@@ -978,62 +978,62 @@ class DvgSlam : public rclcpp::Node{
                     bool right_neighbor = true;
                     bool foward_neighbor = true;
                     bool back_neighbor = true;
-                    if(alt_chunk_lookup(chunk, total_x, total_y, total_z) < 2){
+                    if(chunk_lookup(chunk, total_x, total_y, total_z) < 2){
                         continue;
                     }
                     //up
                     if(moving_z == ALT_CHUNK_LEN - 1){
                         if(upper_neighbor_chunk != NULL){
-                            up_neighbor = alt_chunk_lookup(upper_neighbor_chunk, total_x, total_y, total_z + 1) >= 2;
+                            up_neighbor = chunk_lookup(upper_neighbor_chunk, total_x, total_y, total_z + 1) >= 2;
                         }
                     }
                     else{
-                        up_neighbor = alt_chunk_lookup(chunk, total_x, total_y, total_z + 1) >= 2;
+                        up_neighbor = chunk_lookup(chunk, total_x, total_y, total_z + 1) >= 2;
                     }
                     //down
                     if(moving_z == 0){
                         if(lower_neighbor_chunk != NULL){
-                            down_neighbor = alt_chunk_lookup(lower_neighbor_chunk, total_x, total_y, total_z - 1) >= 2;
+                            down_neighbor = chunk_lookup(lower_neighbor_chunk, total_x, total_y, total_z - 1) >= 2;
                         }
                     }
                     else{
-                        down_neighbor = alt_chunk_lookup(chunk, total_x, total_y, total_z - 1) >= 2;
+                        down_neighbor = chunk_lookup(chunk, total_x, total_y, total_z - 1) >= 2;
                     }
                     //left
                     if(moving_y == ALT_CHUNK_LEN - 1){
                         if(left_neighbor_chunk != NULL){
-                            left_neighbor = alt_chunk_lookup(left_neighbor_chunk, total_x, total_y + 1, total_z) >= 2;
+                            left_neighbor = chunk_lookup(left_neighbor_chunk, total_x, total_y + 1, total_z) >= 2;
                         }
                     }
                     else{
-                        left_neighbor = alt_chunk_lookup(chunk, total_x, total_y + 1, total_z) >= 2;
+                        left_neighbor = chunk_lookup(chunk, total_x, total_y + 1, total_z) >= 2;
                     }
                     //right
                     if(moving_y == 0){
                         if(right_neighbor_chunk != NULL){
-                            right_neighbor = alt_chunk_lookup(right_neighbor_chunk, total_x, total_y - 1, total_z) >= 2;
+                            right_neighbor = chunk_lookup(right_neighbor_chunk, total_x, total_y - 1, total_z) >= 2;
                         }
                     }
                     else{
-                        right_neighbor = alt_chunk_lookup(chunk, total_x, total_y - 1, total_z) >= 2;
+                        right_neighbor = chunk_lookup(chunk, total_x, total_y - 1, total_z) >= 2;
                     }
                     //foward
                     if(moving_x == ALT_CHUNK_LEN - 1){
                         if(foward_neighbor_chunk != NULL){
-                            foward_neighbor = alt_chunk_lookup(foward_neighbor_chunk, total_x + 1, total_y, total_z) >= 2;
+                            foward_neighbor = chunk_lookup(foward_neighbor_chunk, total_x + 1, total_y, total_z) >= 2;
                         }
                     }
                     else{
-                        foward_neighbor = alt_chunk_lookup(chunk, total_x + 1, total_y, total_z) >= 2;
+                        foward_neighbor = chunk_lookup(chunk, total_x + 1, total_y, total_z) >= 2;
                     }
                     //back
                     if(moving_x == 0){
                         if(back_neighbor_chunk != NULL){
-                            back_neighbor = alt_chunk_lookup(back_neighbor_chunk, total_x - 1, total_y, total_z) >= 2;
+                            back_neighbor = chunk_lookup(back_neighbor_chunk, total_x - 1, total_y, total_z) >= 2;
                         }
                     }
                     else{
-                        back_neighbor = alt_chunk_lookup(chunk, total_x - 1, total_y, total_z) >= 2;
+                        back_neighbor = chunk_lookup(chunk, total_x - 1, total_y, total_z) >= 2;
                     }
                     OutVertex_t v1;
                     OutVertex_t v2;
@@ -1211,8 +1211,8 @@ class DvgSlam : public rclcpp::Node{
         return output;
     }
 
-    void v2_mesher_get_faces_and_verts(VoxelGraph_t* graph,
-            AltChunk_t* chunk,
+    void v2_mesher_get_faces_and_verts(Dvg_t* graph,
+            Chunk_t* chunk,
             std::vector<InFace_t>* in_faces,
             std::vector<InVertex_t>* in_vertices, 
             std::vector<int32_t>* vertex_hash_table,
@@ -1221,12 +1221,12 @@ class DvgSlam : public rclcpp::Node{
         int64_t base_x = chunk->x_offset;
         int64_t base_y = chunk->y_offset;
         int64_t base_z = chunk->z_offset;
-        AltChunk_t* upper_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y, base_z + ALT_CHUNK_LEN);
-        AltChunk_t* lower_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y, base_z - ALT_CHUNK_LEN);
-        AltChunk_t* left_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y + ALT_CHUNK_LEN, base_z);
-        AltChunk_t* right_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x, base_y - ALT_CHUNK_LEN, base_z);
-        AltChunk_t* foward_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x + ALT_CHUNK_LEN, base_y, base_z);
-        AltChunk_t* back_neighbor_chunk = voxel_graph_chunk_hash_table_lookup(graph, base_x - ALT_CHUNK_LEN, base_y, base_z);
+        Chunk_t* upper_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y, base_z + ALT_CHUNK_LEN);
+        Chunk_t* lower_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y, base_z - ALT_CHUNK_LEN);
+        Chunk_t* left_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y + ALT_CHUNK_LEN, base_z);
+        Chunk_t* right_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x, base_y - ALT_CHUNK_LEN, base_z);
+        Chunk_t* foward_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x + ALT_CHUNK_LEN, base_y, base_z);
+        Chunk_t* back_neighbor_chunk = dvg_chunk_hash_table_lookup(graph, base_x - ALT_CHUNK_LEN, base_y, base_z);
         for(int64_t moving_x = 0; moving_x < 16; moving_x++){
             for(int64_t moving_y = 0; moving_y < 16; moving_y++){
                 for(int64_t moving_z = 0; moving_z < 16; moving_z++){
@@ -1239,62 +1239,62 @@ class DvgSlam : public rclcpp::Node{
                     bool right_neighbor = true;
                     bool foward_neighbor = true;
                     bool back_neighbor = true;
-                    if(alt_chunk_lookup(chunk, total_x, total_y, total_z) < 2){
+                    if(chunk_lookup(chunk, total_x, total_y, total_z) < 2){
                         continue;
                     }
                     //up
                     if(moving_z == ALT_CHUNK_LEN - 1){
                         if(upper_neighbor_chunk != NULL){
-                            up_neighbor = alt_chunk_lookup(upper_neighbor_chunk, total_x, total_y, total_z + 1) >= 2;
+                            up_neighbor = chunk_lookup(upper_neighbor_chunk, total_x, total_y, total_z + 1) >= 2;
                         }
                     }
                     else{
-                        up_neighbor = alt_chunk_lookup(chunk, total_x, total_y, total_z + 1) >= 2;
+                        up_neighbor = chunk_lookup(chunk, total_x, total_y, total_z + 1) >= 2;
                     }
                     //down
                     if(moving_z == 0){
                         if(lower_neighbor_chunk != NULL){
-                            down_neighbor = alt_chunk_lookup(lower_neighbor_chunk, total_x, total_y, total_z - 1) >= 2;
+                            down_neighbor = chunk_lookup(lower_neighbor_chunk, total_x, total_y, total_z - 1) >= 2;
                         }
                     }
                     else{
-                        down_neighbor = alt_chunk_lookup(chunk, total_x, total_y, total_z - 1) >= 2;
+                        down_neighbor = chunk_lookup(chunk, total_x, total_y, total_z - 1) >= 2;
                     }
                     //left
                     if(moving_y == ALT_CHUNK_LEN - 1){
                         if(left_neighbor_chunk != NULL){
-                            left_neighbor = alt_chunk_lookup(left_neighbor_chunk, total_x, total_y + 1, total_z) >= 2;
+                            left_neighbor = chunk_lookup(left_neighbor_chunk, total_x, total_y + 1, total_z) >= 2;
                         }
                     }
                     else{
-                        left_neighbor = alt_chunk_lookup(chunk, total_x, total_y + 1, total_z) >= 2;
+                        left_neighbor = chunk_lookup(chunk, total_x, total_y + 1, total_z) >= 2;
                     }
                     //right
                     if(moving_y == 0){
                         if(right_neighbor_chunk != NULL){
-                            right_neighbor = alt_chunk_lookup(right_neighbor_chunk, total_x, total_y - 1, total_z) >= 2;
+                            right_neighbor = chunk_lookup(right_neighbor_chunk, total_x, total_y - 1, total_z) >= 2;
                         }
                     }
                     else{
-                        right_neighbor = alt_chunk_lookup(chunk, total_x, total_y - 1, total_z) >= 2;
+                        right_neighbor = chunk_lookup(chunk, total_x, total_y - 1, total_z) >= 2;
                     }
                     //foward
                     if(moving_x == ALT_CHUNK_LEN - 1){
                         if(foward_neighbor_chunk != NULL){
-                            foward_neighbor = alt_chunk_lookup(foward_neighbor_chunk, total_x + 1, total_y, total_z) >= 2;
+                            foward_neighbor = chunk_lookup(foward_neighbor_chunk, total_x + 1, total_y, total_z) >= 2;
                         }
                     }
                     else{
-                        foward_neighbor = alt_chunk_lookup(chunk, total_x + 1, total_y, total_z) >= 2;
+                        foward_neighbor = chunk_lookup(chunk, total_x + 1, total_y, total_z) >= 2;
                     }
                     //back
                     if(moving_x == 0){
                         if(back_neighbor_chunk != NULL){
-                            back_neighbor = alt_chunk_lookup(back_neighbor_chunk, total_x - 1, total_y, total_z) >= 2;
+                            back_neighbor = chunk_lookup(back_neighbor_chunk, total_x - 1, total_y, total_z) >= 2;
                         }
                     }
                     else{
-                        back_neighbor = alt_chunk_lookup(chunk, total_x - 1, total_y, total_z) >= 2;
+                        back_neighbor = chunk_lookup(chunk, total_x - 1, total_y, total_z) >= 2;
                     }
                     OutVertex_t v1;
                     OutVertex_t v2;
@@ -1472,7 +1472,7 @@ class DvgSlam : public rclcpp::Node{
     }
 
     
-    void build_and_publish_mesh_v2(VoxelGraph_t* graph, rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
+    void build_and_publish_mesh_v2(Dvg_t* graph, rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
         std::vector<InFace_t> in_faces;
         std::vector<InVertex_t> in_vertices;
         RCLCPP_INFO(this->get_logger(), "creating final hashtable");
@@ -1512,7 +1512,7 @@ class DvgSlam : public rclcpp::Node{
 
 
     }
-    void build_and_publish_regional_mesh_v2(VoxelGraph_t* graph,
+    void build_and_publish_regional_mesh_v2(Dvg_t* graph,
             uint32_t hor_chunk_radius, uint32_t vert_chunk_radius,
             rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
         
@@ -1540,11 +1540,11 @@ class DvgSlam : public rclcpp::Node{
         int64_t y_pos_target = (global_point.position.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
         int64_t z_neg_target = (global_point.position.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
         int64_t z_pos_target = (global_point.position.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
-        std::vector<AltChunk_t*> chunk_ptrs;
+        std::vector<Chunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
                 for(int64_t z = z_neg_target; z <= z_pos_target; z += ALT_CHUNK_LEN){
-                    AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+                    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
                     if(chunk != NULL){
                         chunk_ptrs.push_back(chunk);
                     }
@@ -1567,7 +1567,7 @@ class DvgSlam : public rclcpp::Node{
 
     }
 
-    void build_and_publish_regional_mesh(VoxelGraph_t* graph,
+    void build_and_publish_regional_mesh(Dvg_t* graph,
             uint32_t hor_chunk_radius, uint32_t vert_chunk_radius,
             rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
         std::vector<ChunkMesh_t> chunk_local_meshes(graph->current_chunk_index);
@@ -1592,11 +1592,11 @@ class DvgSlam : public rclcpp::Node{
         int64_t y_pos_target = (global_point.position.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
         int64_t z_neg_target = (global_point.position.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
         int64_t z_pos_target = (global_point.position.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
-        std::vector<AltChunk_t*> chunk_ptrs;
+        std::vector<Chunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
                 for(int64_t z = z_neg_target; z <= z_pos_target; z += ALT_CHUNK_LEN){
-                    AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+                    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
                     if(chunk != NULL){
                         chunk_ptrs.push_back(chunk);
                     }
@@ -1615,14 +1615,14 @@ class DvgSlam : public rclcpp::Node{
 
     }
     static void build_mesh_section_global(DvgSlam* self, uint32_t vect_index,
-            AltChunk_t* chunk, std::vector<ChunkMesh_t>* output, bool wavefront){
+            Chunk_t* chunk, std::vector<ChunkMesh_t>* output, bool wavefront){
         //for(uint32_t i = first_index; i <= last_index; i++){
             //output->at(i) = self->genChunkMesh(&(graph->chunks[i]));
         output->at(vect_index) = self->gen_chunk_mesh_with_greedy_mesher(self->graph, chunk, wavefront);
         //}
         return;
     }
-    void build_and_publish_mesh(VoxelGraph_t* graph, rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
+    void build_and_publish_mesh(Dvg_t* graph, rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
         std::vector<OutVertex_t> vertex_normals;
         OutVertex_t up_normal = {0.0f, 0.0f, 1.0f};
         vertex_normals.push_back(up_normal);
@@ -1658,7 +1658,7 @@ class DvgSlam : public rclcpp::Node{
         
         //if(currentIndex < graph->current_chunk_index)
         //{
-        std::vector<AltChunk_t*> chunk_ptrs;
+        std::vector<Chunk_t*> chunk_ptrs;
         for(uint32_t i = 0; i < graph->chunk_hash_table_size; i++){
             if(graph->chunk_hash_table[i] != NULL){
                 chunk_ptrs.push_back(graph->chunk_hash_table[i]);
@@ -1724,7 +1724,7 @@ class DvgSlam : public rclcpp::Node{
     
     }
 
-    void write_global_wavefront_v2(VoxelGraph_t* graph){
+    void write_global_wavefront_v2(Dvg_t* graph){
         io_mutex.lock();
         ChunkMesh_t output;
         std::vector<InFace_t> in_faces;
@@ -1761,7 +1761,7 @@ class DvgSlam : public rclcpp::Node{
         io_mutex.unlock();
     }
 
-    void write_global_wavefront(VoxelGraph_t* graph){
+    void write_global_wavefront(Dvg_t* graph){
         io_mutex.lock();
         std::vector<OutVertex_t> vertex_normals;
         OutVertex_t up_normal = {0.0f, 0.0f, 1.0f};
@@ -1896,7 +1896,7 @@ class DvgSlam : public rclcpp::Node{
         io_mutex.unlock();
     }
     bool has_odom = false;
-    VoxelGraph_t* graph;
+    Dvg_t* graph;
     std::string topic;
     std::string del_topic;
     std::string frame_id = "odom";
@@ -2013,7 +2013,7 @@ class DvgSlam : public rclcpp::Node{
                 int64_t x_point = p.x;
                 int64_t y_point = p.y;
                 int64_t z_point = p.z;
-                voxel_graph_insert(graph, x_point, y_point, z_point);
+                dvg_insert(graph, x_point, y_point, z_point);
             }
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
@@ -2023,7 +2023,7 @@ class DvgSlam : public rclcpp::Node{
         }
             /*
             for (const auto &p : input_cloud.points) { 
-                voxel_graph_insert(graph, p.x, p.y, p.z);
+                dvg_insert(graph, p.x, p.y, p.z);
             }
             const auto end = std::chrono::steady_clock::now();
             auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
@@ -2051,7 +2051,7 @@ class DvgSlam : public rclcpp::Node{
                 int64_t x_point = p.x;
                 int64_t y_point = p.y;
                 int64_t z_point = p.z;
-                voxel_graph_insert(graph, x_point, y_point, z_point);
+                dvg_insert(graph, x_point, y_point, z_point);
             }
             */
             io_mutex.unlock();
@@ -2135,7 +2135,7 @@ class DvgSlam : public rclcpp::Node{
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            voxel_graph_insert(graph, x_point, y_point, z_point);
+            dvg_insert(graph, x_point, y_point, z_point);
         }
         */
         for(int64_t cnt = 0; cnt < hashmap->capacity;cnt++){
@@ -2143,7 +2143,7 @@ class DvgSlam : public rclcpp::Node{
                 int64_t x = hashmap->slots[cnt].key.x;
                 int64_t y = hashmap->slots[cnt].key.y;
                 int64_t z = hashmap->slots[cnt].key.z;
-                voxel_graph_insert(graph, x, y, z);
+                dvg_insert(graph, x, y, z);
             }
         }
         voxel_hash_map_free(hashmap);
@@ -2189,7 +2189,7 @@ class DvgSlam : public rclcpp::Node{
                 continue;
             }
             bool debug_var = false;
-            debug_var = voxel_graph_insert(graph, (int64_t) input_values[0], (int64_t) input_values[1], (int64_t) input_values[2]);
+            debug_var = dvg_insert(graph, (int64_t) input_values[0], (int64_t) input_values[1], (int64_t) input_values[2]);
             if(input_values[2] > global_point.z - 0.5 * (float)scalar && raycast_enable){
                 raycast_delete(global_point.x, global_point.y, global_point.z, input_values[0], input_values[1], input_values[2], false);
             }
@@ -2277,11 +2277,11 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
         int64_t y_pos_target = (map_pose.position.y * scalar) + hor_chunk_radius * ALT_CHUNK_LEN;
         int64_t z_neg_target = (map_pose.position.z * scalar) - vert_chunk_radius * ALT_CHUNK_LEN;
         int64_t z_pos_target = (map_pose.position.z * scalar) + vert_chunk_radius * ALT_CHUNK_LEN;
-        std::vector<AltChunk_t*> chunk_ptrs;
+        std::vector<Chunk_t*> chunk_ptrs;
         for(int64_t x = x_neg_target; x <= x_pos_target; x += ALT_CHUNK_LEN){
             for(int64_t y = y_neg_target; y <= y_pos_target; y += ALT_CHUNK_LEN){
                 for(int64_t z = z_neg_target; z <= z_pos_target; z += ALT_CHUNK_LEN){
-                    AltChunk_t* chunk = voxel_graph_chunk_hash_table_lookup(graph, x, y, z);
+                    Chunk_t* chunk = dvg_chunk_hash_table_lookup(graph, x, y, z);
                     if(chunk != NULL){
                         chunk_ptrs.push_back(chunk);
                     }
@@ -2296,7 +2296,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
         }
         return output;
     }
-    void add_to_pcl_cloud(pcl::PointCloud<pcl::PointXYZ>* input, AltChunk_t* chunk){
+    void add_to_pcl_cloud(pcl::PointCloud<pcl::PointXYZ>* input, Chunk_t* chunk){
         int64_t base_x = chunk->x_offset;
         int64_t base_y = chunk->y_offset;
         int64_t base_z = chunk->z_offset;
@@ -2306,7 +2306,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
                     int64_t total_x = base_x + moving_x;
                     int64_t total_y = base_y + moving_y;
                     int64_t total_z = base_z + moving_z;
-                    if(alt_chunk_lookup(chunk, total_x, total_y, total_z) < 2){
+                    if(chunk_lookup(chunk, total_x, total_y, total_z) < 2){
                         continue;
                     }
                     else{
@@ -2466,12 +2466,12 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
             p.x = x_point;
             p.y = y_point;
             p.z = z_point;
-            voxel_graph_insert(graph, x_point, y_point, z_point);
+            dvg_insert(graph, x_point, y_point, z_point);
             /*
             float x_dist = x_point - global_point.position.x * (float) scalar;
             float y_dist = y_point - global_point.position.y * (float) scalar;
             if(x_dist * x_dist + y_dist * y_dist > (1.0f * (float)scalar) * (1.0f * (float) scalar)){
-                voxel_graph_insert(graph, x_point, y_point, z_point);
+                dvg_insert(graph, x_point, y_point, z_point);
             }
             */
         }
@@ -2483,7 +2483,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
             p.x = x_point;
             p.y = y_point;
             p.z = z_point;
-            voxel_graph_delete(graph, x_point, y_point, z_point);
+            dvg_delete(graph, x_point, y_point, z_point);
         }
         */
         /*
@@ -2496,18 +2496,18 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            //voxel_graph_insert(graph, x_point, y_point, z_point);
+            //dvg_insert(graph, x_point, y_point, z_point);
         }
         for(const auto &p : del_cloud.points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            //voxel_graph_delete(graph, x_point, y_point, z_point);
+            //dvg_delete(graph, x_point, y_point, z_point);
         } 
         
         if(map_cloud.empty()){
             for (const auto &p : input_cloud.points) { 
-                voxel_graph_insert(graph, p.x, p.y, p.z);
+                dvg_insert(graph, p.x, p.y, p.z);
             }
             const auto end = std::chrono::steady_clock::now();
             auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -2533,14 +2533,14 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            voxel_graph_insert(graph, x_point, y_point, z_point);
+            dvg_insert(graph, x_point, y_point, z_point);
         }
         
         for(const auto &p : input_del_cloud.points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            voxel_graph_delete(graph, x_point, y_point, z_point);
+            dvg_delete(graph, x_point, y_point, z_point);
         }
         
         global_point.position.x += corrective_transform(0,3) / (float)scalar;
@@ -2594,7 +2594,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
         static const float neighbor_costs[4]{0.0f, 1.0f, 1.41421356f, 1.73205081f};
         int64_t horizontal_clearance = 0.7 * (float) self->scalar;
         int64_t vertical_clearance = 1.2 * (float) self->scalar;
-        voxel_graph_build_inflation(self->graph, horizontal_clearance, vertical_clearance);
+        dvg_build_inflation(self->graph, horizontal_clearance, vertical_clearance);
         VoxelHashMap_t* nodes = voxel_hash_map_init(1<<17, 64, 0.5);
         VoxelPriorityQueue_t* prio_queue = voxel_priority_queue_init(1<<17);
         int64_t starting_x = self->global_point.position.x * (float) self->scalar;
@@ -2612,14 +2612,14 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
             return;
         }
         
-        if(voxel_graph_lookup_inflation(self->graph, starting_x, starting_y, starting_z)){
+        if(dvg_lookup_inflation(self->graph, starting_x, starting_y, starting_z)){
             voxel_hash_map_free(nodes);
             voxel_priority_queue_free(prio_queue);
             self->nav_mutex.unlock();
             //response->success = false;
             return;
         }
-        if(voxel_graph_lookup_inflation(self->graph, goal_x, goal_y, goal_z)){
+        if(dvg_lookup_inflation(self->graph, goal_x, goal_y, goal_z)){
             voxel_hash_map_free(nodes);
             voxel_priority_queue_free(prio_queue);
             self->nav_mutex.unlock();
@@ -2662,7 +2662,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
                 for(int64_t y = current_slot->key.y - downsample_factor; y <= current_slot->key.y + downsample_factor; y+=downsample_factor){
                     for(int64_t z = current_slot->key.z - downsample_factor; z <= current_slot->key.z + downsample_factor; z+=downsample_factor){
                         if(!(x == current_slot->key.x && y == current_slot->key.y && z == current_slot->key.z) && 
-                            !voxel_graph_lookup_inflation(self->graph, x, y, z)){
+                            !dvg_lookup_inflation(self->graph, x, y, z)){
                             PointSlot_t* next_point = voxel_hash_map_insert(nodes, x, y, z);
                             next_point->astar_heuristic = self->get_euclidean_dist(next_point->key.x, next_point->key.y, next_point->key.z, goal_x, goal_y, goal_z);
                             current_slot = voxel_hash_map_lookup(nodes, current_key.x, current_key.y, current_key.z);
