@@ -34,6 +34,8 @@
 #include "../lib/Dvg.h"
 #include "../lib/VoxelHashMap.h"
 #include "../lib/VoxelPriorityQueue.h"
+#include "../lib/DvgVector.h"
+#include "../lib/DynamicObjectRemoval.c"
 #include "mesh_msgs/msg/mesh_geometry_stamped.hpp"
 // ROS / messages
 #include "octomap_msgs/msg/octomap.hpp"
@@ -83,11 +85,6 @@ typedef struct{
     bool dead;
 } InFace_t;
 
-typedef struct{
-    double x;
-    double y;
-    double z;
-} DoubleVector_t;
 
 typedef struct{
     std::vector<uint32_t> requestor_indices;
@@ -253,143 +250,7 @@ class DvgSlam : public rclcpp::Node{
             out_msg.header.frame_id = "odom";
             publisher_two->publish(out_msg);
         }
-    
-    DoubleVector_t build_voxel_local_normal(DoubleVector_t ray_vect_normalized, int64_t voxel_x, int64_t voxel_y, int64_t voxel_z, int64_t radius){
-        DoubleVector_t cumulative_vect{0,0,0};
-        int64_t voxel_count = 0;
-        for(int64_t x_offset = -radius; x_offset <= radius; x_offset++){
-            for(int64_t y_offset = -radius; y_offset <= radius; y_offset++){
-                for(int64_t z_offset = -radius; z_offset <= radius; z_offset++){
-                    if(x_offset * x_offset + y_offset * y_offset + z_offset * z_offset < radius * radius){
-                        if(dvg_lookup(graph, voxel_x + x_offset, voxel_y + y_offset, voxel_z + z_offset) >= 2){
-                            cumulative_vect.x += x_offset;
-                            cumulative_vect.y += y_offset;
-                            cumulative_vect.z += z_offset;
-                            voxel_count++;
-                        }
-                    }
-                }
-            }
-        }
-        double vector_len2 = cumulative_vect.x * cumulative_vect.x + cumulative_vect.y * cumulative_vect.y + cumulative_vect.z * cumulative_vect.z;
-        if(voxel_count < 2 || vector_len2 < 1.0){
-            return DoubleVector_t{-ray_vect_normalized.x, -ray_vect_normalized.y, -ray_vect_normalized.z};
-        }
-        DoubleVector_t cumulative_vect_norm = double_vect_normalize(cumulative_vect);
-        DoubleVector_t normal = {-cumulative_vect_norm.x, -cumulative_vect_norm.y, -cumulative_vect_norm.z};
-        return normal;
-    }
-    void raycast_delete(int64_t org_x, int64_t org_y, int64_t org_z,
-                    int64_t dest_x, int64_t dest_y, int64_t dest_z,
-                    bool splash_delete,
-                    double max_range_meters){
-        if(org_x == dest_x && org_y == dest_y && org_z == dest_z) return;
 
-        DoubleVector_t diff_vect{
-            (double)(dest_x - org_x),
-            (double)(dest_y - org_y),
-            (double)(dest_z - org_z)
-        };
-
-        double len2 = diff_vect.x * diff_vect.x
-                    + diff_vect.y * diff_vect.y
-                    + diff_vect.z * diff_vect.z;
-
-        if(len2 < 1.0) return;
-
-        double ray_len = std::sqrt(len2);
-
-        // Convert max range from meters to your internal coordinate units.
-        double max_range_units = max_range_meters * (double)scalar;
-
-        // If the measured endpoint is closer than the clamp, use the real endpoint.
-        // Otherwise only travel up to the clamp.
-        double clamped_ray_len = std::min(ray_len, max_range_units);
-
-        if(clamped_ray_len < 1.0) return;
-
-        bool endpoint_inside_clamp = ray_len <= max_range_units;
-
-        DoubleVector_t normal = double_vect_normalize(diff_vect);
-
-        int64_t current_del_count = 0;
-        int64_t max_deletions = std::max<int64_t>(
-        1,
-        (int64_t)((float)scalar * 0.1f)
-        );
-        constexpr double DELETE_NORMAL_DOT_THRESHOLD = -0.2;
-        uint32_t counter = 1;
-
-        uint32_t threshold = 0.15f * (float)scalar;
-        int64_t splash_radius = std::max<int64_t>(1, (int64_t)((float)scalar * 0.10f));
-
-        if(splash_delete){
-            threshold = splash_radius * 2 + threshold;
-        }
-
-        double threshold2 = (double)threshold * (double)threshold;
-
-        uint32_t max_iter = (uint32_t)std::ceil(clamped_ray_len) + 1;
-
-        int64_t travel_x = std::lround(org_x + normal.x * counter);
-        int64_t travel_y = std::lround(org_y + normal.y * counter);
-        int64_t travel_z = std::lround(org_z + normal.z * counter);
-
-        while(counter < max_iter){
-            // Only use endpoint threshold if the real endpoint is inside the clamp.
-            // For far-away points, we do not care about the endpoint threshold,
-            // because the ray should stop at max_range_meters instead.
-            if(endpoint_inside_clamp){
-                double dx = (double)(travel_x - dest_x);
-                double dy = (double)(travel_y - dest_y);
-                double dz = (double)(travel_z - dest_z);
-
-                double dist2_to_dest = dx * dx + dy * dy + dz * dz;
-
-                if(dist2_to_dest <= threshold2){
-                    return;
-                }
-            }
-
-            bool point_detected = dvg_lookup(graph, travel_x, travel_y, travel_z);
-
-            if(current_del_count >= max_deletions){
-                return;
-            }
-
-            if(point_detected){
-                DoubleVector_t voxel_normal =
-                    build_voxel_local_normal(normal, travel_x, travel_y, travel_z, 6);
-
-                double angle = voxel_normal.x * normal.x
-                            + voxel_normal.y * normal.y
-                            + voxel_normal.z * normal.z;
-
-                if(angle <= DELETE_NORMAL_DOT_THRESHOLD){
-                    if(splash_delete){
-                        for(int64_t sx = travel_x - splash_radius; sx <= travel_x + splash_radius; sx++){
-                            for(int64_t sy = travel_y - splash_radius; sy <= travel_y + splash_radius; sy++){
-                                for(int64_t sz = travel_z - splash_radius; sz <= travel_z + splash_radius; sz++){
-                                    dvg_delete(graph, sx, sy, sz);
-                                }
-                            }
-                        }
-                        current_del_count++;
-                    }
-                    else{
-                        current_del_count++;
-                        dvg_delete(graph, travel_x, travel_y, travel_z);
-                    }
-                }
-            }
-
-            counter++;
-
-            travel_x = std::lround(org_x + normal.x * counter);
-            travel_y = std::lround(org_y + normal.y * counter);
-            travel_z = std::lround(org_z + normal.z * counter);
-        }
-    }
     int64_t get_manhattan_dist(int64_t org_x, int64_t org_y, int64_t org_z,
              int64_t dest_x, int64_t dest_y, int64_t dest_z){
         return labs(org_x - dest_x) + labs(org_y - dest_y) + labs(org_z - dest_z);
@@ -400,14 +261,6 @@ class DvgSlam : public rclcpp::Node{
         float y_dist = org_y - dest_y;
         float z_dist = org_z - dest_z;
         return std::sqrt(x_dist * x_dist + y_dist * y_dist + z_dist * z_dist);
-    }
-    DoubleVector_t double_vect_normalize(DoubleVector_t in){       
-        DoubleVector_t out;
-        double vector_len = sqrt(in.x * in.x + in.y * in.y + in.z * in.z);
-        out.x = in.x / vector_len;
-        out.y = in.y / vector_len;
-        out.z = in.z / vector_len;
-        return out;
     }
     bool out_vertex_equals(OutVertex_t v1, OutVertex_t v2){
         bool x_equal = fabs(v1.x - v2.x) < 0.005f;
@@ -2126,7 +1979,7 @@ class DvgSlam : public rclcpp::Node{
                 float z_dist_sq = z_dist * z_dist;
                 */
                 //if(std::sqrt(x_dist_sq + y_dist_sq + z_dist_sq) < 5 * scalar){
-                raycast_delete(robot_point_x, robot_point_y, robot_point_z, x, y, z, true, 5);
+                dynamic_object_removal(graph, robot_point_x, robot_point_y, robot_point_z, x, y, z, true, 5, scalar);
                 //}
             }
         }
