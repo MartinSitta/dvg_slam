@@ -2,6 +2,9 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <pcl/impl/point_types.hpp>
+#include <rclcpp/publisher.hpp>
+#include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include <string>
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -123,6 +126,7 @@ class DvgSlam : public rclcpp::Node{
         this->declare_parameter<int>("ros2_msg_greedy_mesher", 0);
         this->declare_parameter<int>("wavefront_greedy_mesher", 0);
         this->declare_parameter<int>("raycast_enable", 0);
+        this->declare_parameter<bool>("icp_gate_bypass", false);
         this->render_distance_horizontal = this->get_parameter("render_distance_horizontal").as_int();
         this->render_distance_vertical = this->get_parameter("render_distance_vertical").as_int();
         this->obj_filepath = this->get_parameter("obj_filepath").as_string();
@@ -167,9 +171,10 @@ class DvgSlam : public rclcpp::Node{
             this->out_topic = this->get_parameter("out_topic").as_string();
             this->scalar = this->get_parameter("scalar").as_int();
             this->obj_filepath = this->get_parameter("obj_filepath").as_string();
-            rclcpp::sleep_for(std::chrono::seconds(5));
         }
         RCLCPP_INFO(this->get_logger(), "initializing topics\n");
+        this->icp_gate_bypass = this->get_parameter("icp_gate_bypass").as_bool();
+        rclcpp::sleep_for(std::chrono::seconds(5));
         publisher_ = this->create_publisher<mesh_msgs::msg::MeshGeometryStamped>(out_topic, 1);
         mesh_timer = this->create_wall_timer(
         1000ms, std::bind(&DvgSlam::timer_callback, this));
@@ -181,16 +186,14 @@ class DvgSlam : public rclcpp::Node{
         }
         subscription_two = this->create_subscription<nav_msgs::msg::Odometry>(odom_topic,
                 1, std::bind(&DvgSlam::odom_callback, this, _1)); 
-        if(octomap_binary_topic != "")
-        {
-            octomap_binary_subscription = this->create_subscription<octomap_msgs::msg::Octomap>(
-                    octomap_binary_topic, 1,
-                    std::bind(&DvgSlam::octomap_bin_callback,
-                    this, _1));
-        }
         tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
         publisher_two = this->create_publisher<nav_msgs::msg::Odometry>("debug_map_pose", 1);
+        pointcloud_debug_publisher =
+            this->create_publisher<sensor_msgs::msg::PointCloud2>(
+                "/dvg_slam/debug_point_cloud",
+                rclcpp::QoS(1)
+            );
         path_publisher = this->create_publisher<nav_msgs::msg::Path>("planned_path", 1);
         pose_timer = this->create_wall_timer(
         10ms, std::bind(&DvgSlam::debug_map_pose_callback, this));
@@ -247,7 +250,7 @@ class DvgSlam : public rclcpp::Node{
             nav_msgs::msg::Odometry out_msg;
             out_msg.pose.pose = global_point;
             out_msg.child_frame_id = "base_link";
-            out_msg.header.frame_id = "odom";
+            out_msg.header.frame_id = "map";
             publisher_two->publish(out_msg);
         }
 
@@ -1532,7 +1535,7 @@ class DvgSlam : public rclcpp::Node{
             std::vector<OutVertex_t>* vertex_normals,
             rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr pub){
         mesh_msgs::msg::MeshGeometryStamped msg;
-        msg.header.frame_id = this->frame_id;
+        msg.header.frame_id = "map";
         RCLCPP_INFO(this->get_logger(), "publishing mesh with the tf frame %s", msg.header.frame_id.c_str());
         uint64_t vertex_offset = 0;
         for(uint64_t i = 0; i < meshes->size(); i++){
@@ -1765,6 +1768,7 @@ class DvgSlam : public rclcpp::Node{
     rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr publisher_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr publisher_two;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_debug_publisher;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_two; 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_three;
@@ -1791,6 +1795,7 @@ class DvgSlam : public rclcpp::Node{
     std::chrono::steady_clock::time_point last_processed_pointcloud_msg;
     bool first_call_pc_in = true;
     rclcpp::Service<dvg_slam::srv::GetPath>::SharedPtr service;
+    bool icp_gate_bypass;
     void point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {        
         io_mutex.lock();
@@ -1819,6 +1824,7 @@ class DvgSlam : public rclcpp::Node{
                 global_point.orientation.x,
                 global_point.orientation.y,
                 global_point.orientation.z);
+        q.normalize();
 
         Eigen::Vector3f t(
                 global_point.position.x,
@@ -1837,9 +1843,34 @@ class DvgSlam : public rclcpp::Node{
             io_mutex.unlock();
             return;
         }
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dedup_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+        VoxelHashMap_t* hashmap = voxel_hash_map_init(1 << 17, 30, 0.5f);
+
+        for (const auto& p : raw_cloud->points) {
+            int64_t x = static_cast<int64_t>(p.x * static_cast<float>(scalar));
+            int64_t y = static_cast<int64_t>(p.y * static_cast<float>(scalar));
+            int64_t z = static_cast<int64_t>(p.z * static_cast<float>(scalar));
+
+            if (voxel_hash_map_lookup(hashmap, x, y, z)) {
+                continue;
+            }
+
+            voxel_hash_map_insert(hashmap, x, y, z);
+            dedup_cloud->push_back(p);
+        }
+
+        voxel_hash_map_free(hashmap);
+
+        if (dedup_cloud->empty()) {
+            RCLCPP_WARN(this->get_logger(), "pointcloud empty after de-duplication!");
+            io_mutex.unlock();
+            return;
+        }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::transformPointCloud(*raw_cloud, *transformed_cloud, combined_transform);
+        pcl::transformPointCloud(*dedup_cloud, *transformed_cloud, combined_transform);
+        
 
         for(auto &p : transformed_cloud->points){
             p.x = (p.x * (float)scalar);
@@ -1851,12 +1882,8 @@ class DvgSlam : public rclcpp::Node{
         pcl::RandomSample<pcl::PointXYZ> rs;
         rs.setInputCloud(transformed_cloud);
         //rs.setSample(raw_cloud->size() * 0.05f);
-        rs.setSample(200);
+        rs.setSample(transformed_cloud->size() * 0.1);
         rs.filter(*downsampled_cloud);
-        //TODO: I HAVE TO TRANSFORM THIS POINTCLOUD FROM THE FRAME ID OF THE MSG
-        //TO GLOBAL POSE THEN I HAVE TO DO ICP
-        //THIS SHOULD LOOK LIKE: TRANSFORM FROM MSG FRAME TO ODOM AND THEN APPLY
-        //THE INTERNAL TRANSFORM FROM ODOM TO GLOBAL POSE
         double radius = 20.0;
         pcl::PointCloud<pcl::PointXYZ> map_cloud = get_local_pointcloud(global_point, radius);
         if(map_cloud.empty() || first_call_pc_in){
@@ -1874,39 +1901,12 @@ class DvgSlam : public rclcpp::Node{
             io_mutex.unlock();
             return;
         }
-            /*
-            for (const auto &p : input_cloud.points) { 
-                dvg_insert(graph, p.x, p.y, p.z);
-            }
-            const auto end = std::chrono::steady_clock::now();
-            auto diff = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
-            RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %ld ns", diff.count());
-            */
         pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
         Eigen::Matrix4f corrective_transform;
         float fitness = 1000.0f;
         bool converged = run_icp(*downsampled_cloud, map_cloud, &corrected_cloud, &corrective_transform, &fitness);
         if(!converged){
             RCLCPP_ERROR(this->get_logger(), "pose correction failed!");
-            /*
-            int64_t robot_point_x = global_point.position.x * (float) scalar;
-            int64_t robot_point_y = global_point.position.y * (float) scalar;
-            int64_t robot_point_z = global_point.position.z * (float) scalar;
-            for(const auto &p : input_cloud.points){
-                int64_t x_point = p.x;
-                int64_t y_point = p.y;
-                int64_t z_point = p.z;
-                if(z_point > robot_point_z){
-                    raycast_delete(robot_point_x, robot_point_y, robot_point_z, x_point, y_point, z_point, false);
-                }
-            }
-            for(const auto &p : input_cloud.points){
-                int64_t x_point = p.x;
-                int64_t y_point = p.y;
-                int64_t z_point = p.z;
-                dvg_insert(graph, x_point, y_point, z_point);
-            }
-            */
             io_mutex.unlock();
             return;
         }
@@ -1916,9 +1916,9 @@ class DvgSlam : public rclcpp::Node{
         Eigen::AngleAxisf angle_axis(R);
         float rotation_angle = std::abs(angle_axis.angle());
 
-        if(fitness > dynamic_map_entry_cap ||
+        if((fitness > dynamic_map_entry_cap ||
         correction_magnitude > 1.0f * (float)scalar ||
-        rotation_angle > 0.35f){
+        rotation_angle > 0.35f) && !icp_gate_bypass){
             RCLCPP_INFO(this->get_logger(), "ICP correction rejected");
             dynamic_map_entry_cap = dynamic_map_entry_cap * 1.05f;
             io_mutex.unlock();
@@ -1930,7 +1930,6 @@ class DvgSlam : public rclcpp::Node{
         // Apply correction to the transformed cloud.
         // corrective_transform is in scaled map units.
         pcl::transformPointCloud(*transformed_cloud, *transformed_cloud, corrective_transform);
-
         // Build correction transform for the robot pose.
         Eigen::Affine3f T_correction = Eigen::Affine3f::Identity();
         T_correction.matrix() = corrective_transform;
@@ -1958,103 +1957,36 @@ class DvgSlam : public rclcpp::Node{
 
         const auto pc_start = std::chrono::steady_clock::now();
 
-        VoxelHashMap_t* hashmap = voxel_hash_map_init(16000, 64, 0.5f);
-        for(const auto &p : transformed_cloud->points){
+       for (const auto &p : transformed_cloud->points) {
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            voxel_hash_map_insert(hashmap, x_point, y_point, z_point);
+
+            dynamic_object_removal(
+                graph,
+                robot_point_x,
+                robot_point_y,
+                robot_point_z,
+                x_point,
+                y_point,
+                z_point,
+                true,
+                5,
+                scalar
+            );
         }
-        for(int64_t cnt = 0; cnt < hashmap->capacity; cnt++){
-            if(hashmap->slots[cnt].state == SLOT_OCCUPIED){
-                int64_t x = hashmap->slots[cnt].key.x;
-                int64_t y = hashmap->slots[cnt].key.y;
-                int64_t z = hashmap->slots[cnt].key.z;
-                /*
-                float x_dist = (float)x - (float)robot_point_x;
-                float y_dist = (float)y - (float)robot_point_y;
-                float z_dist = (float)z - (float)robot_point_z;
-                float x_dist_sq = x_dist * x_dist;
-                float y_dist_sq = y_dist * y_dist;
-                float z_dist_sq = z_dist * z_dist;
-                */
-                //if(std::sqrt(x_dist_sq + y_dist_sq + z_dist_sq) < 5 * scalar){
-                dynamic_object_removal(graph, robot_point_x, robot_point_y, robot_point_z, x, y, z, true, 5, scalar);
-                //}
-            }
-        }
-        /*
-        for(const auto &p : transformed_cloud->points){
+         for(const auto &p : transformed_cloud->points){
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
             dvg_insert(graph, x_point, y_point, z_point);
         }
-        */
-        for(int64_t cnt = 0; cnt < hashmap->capacity;cnt++){
-            if(hashmap->slots[cnt].state == SLOT_OCCUPIED){
-                int64_t x = hashmap->slots[cnt].key.x;
-                int64_t y = hashmap->slots[cnt].key.y;
-                int64_t z = hashmap->slots[cnt].key.z;
-                dvg_insert(graph, x, y, z);
-            }
-        }
-        voxel_hash_map_free(hashmap);
         const auto pc_end = std::chrono::steady_clock::now();
         auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(pc_end - pc_start);
         RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %d ms", diff.count());
 
         io_mutex.unlock();
 
-        /*
-        int64_t point_count = msg->height * msg->width;
-        size_t size_of_each_point = msg->point_step;
-        const auto start = std::chrono::steady_clock::now();
-        uint64_t added_points = 0;
-        for(int64_t cnt = 0; cnt < point_count; cnt++){
-            uint32_t starting_index = cnt * size_of_each_point;
-            FUCKING_WHY_DO_I_HAVE_TO_DO_THIS_GOD_IS_DEAD_AND_I_KILLED_HIM_t binary_blob;
-            //std::memcpy(&x, ptrToStartOfPoint, sizeof(float));
-            //std::memcpy(&y, ptrToStartOfPoint + sizeof(float), sizeof(float));
-            //std::memcpy(&z, ptrToStartOfPoint + sizeof(float) * 2, sizeof(float));
-            float input_values[3] = {0,0,0};
-            for(uint8_t data_cnt = 0; data_cnt < 3; data_cnt++){
-                binary_blob.buf[0] = msg->data[starting_index + (data_cnt * 4)];
-                binary_blob.buf[1] = msg->data[starting_index + 1 + (data_cnt * 4)];
-                binary_blob.buf[2] = msg->data[starting_index + 2 + (data_cnt * 4)];
-                binary_blob.buf[3] = msg->data[starting_index + 3 + (data_cnt * 4)];
-                if(binary_blob.valuef > 9999999999999 || binary_blob.valuef < -9999999999999){
-                    continue;
-                }   
-                if(data_cnt == 2){
-                    input_values[data_cnt] = (int64_t) ((binary_blob.valuef * ((float)scalar)));
-                }
-                else{
-                    input_values[data_cnt] = std::roundf((binary_blob.valuef * ((float)scalar)));
-                }
-            }
-            starting_index += size_of_each_point;
-            if(input_values[0] == prev_x && input_values[1] == prev_y && input_values[2] == prev_z){
-                continue;
-            }
-            if(input_values[0] < -100000){
-                RCLCPP_ERROR(this->get_logger(), "something got corrupted input value was %f", input_values[0]);
-                continue;
-            }
-            bool debug_var = false;
-            debug_var = dvg_insert(graph, (int64_t) input_values[0], (int64_t) input_values[1], (int64_t) input_values[2]);
-            if(input_values[2] > global_point.z - 0.5 * (float)scalar && raycast_enable){
-                raycast_delete(global_point.x, global_point.y, global_point.z, input_values[0], input_values[1], input_values[2], false);
-            }
-            if(debug_var){
-                added_points++;
-            }
-        }
-        const auto end = std::chrono::steady_clock::now();
-        auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        RCLCPP_INFO(this->get_logger(), "entering %ld graph points took %ld ms", added_points ,diff.count());
-        io_mutex.unlock();
-        */
     }
 
 Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
@@ -2227,196 +2159,12 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
         float max_translation = 1.0f * (float) scalar;
         float max_rotation = 0.4; //radians
 
-        if(translation > max_translation || rotation_angle > max_rotation){
+        if((translation > max_translation || rotation_angle > max_rotation) && !this->icp_gate_bypass){
             RCLCPP_ERROR(this->get_logger(), "ICP correction implausible, rejecting");
             return false;
         }
                 
         return true;
-    }
-    void octomap_bin_callback(const octomap_msgs::msg::Octomap::SharedPtr msg){
-        io_mutex.lock();
-        const auto start = std::chrono::steady_clock::now();
-        auto time_since_last_processed_octomap = std::chrono::duration_cast<std::chrono::milliseconds>(start - last_processed_octomap_msg);
-        if(time_since_last_processed_octomap < std::chrono::milliseconds{1000}){
-            io_mutex.unlock();
-            return;
-        }
-        last_processed_octomap_msg = start;
-        octomap::OcTree* octree = dynamic_cast<octomap::OcTree*>(octomap_msgs::binaryMsgToMap(*msg));
-        if (!octree) {
-            RCLCPP_WARN(this->get_logger(), "Failed to convert Octomap message to tree");
-            io_mutex.unlock();
-            return;
-        }
-        double radius = 20.0;
-        pcl::PointCloud<pcl::PointXYZ> raw_cloud;
-        pcl::PointCloud<pcl::PointXYZ> raw_del_cloud;
-        pcl::PointCloud<pcl::PointXYZ> input_cloud;
-        pcl::PointCloud<pcl::PointXYZ> input_del_cloud;
-        pcl::PointCloud<pcl::PointXYZ> del_cloud;
-        pcl::PointCloud<pcl::PointXYZ> map_cloud = get_local_pointcloud(global_point, radius);
-    
-        Eigen::Affine3f x_to_base = Eigen::Affine3f::Identity();
-        try{
-            auto tf = tf_buffer_->lookupTransform(
-                    msg->header.frame_id, "base_link",
-                    msg->header.stamp,
-                    rclcpp::Duration::from_seconds(0.1));
-            Eigen::Vector3f to_base_translation(
-                    tf.transform.translation.x,
-                    tf.transform.translation.y,
-                    tf.transform.translation.z);
-            Eigen::Quaternionf to_base_rotation(
-                    tf.transform.rotation.w,
-                    tf.transform.rotation.x,
-                    tf.transform.rotation.y,
-                    tf.transform.rotation.z);
-            x_to_base.translate(to_base_translation);
-            x_to_base.rotate(to_base_rotation);
-        }catch(const tf2::TransformException& ex){ 
-            RCLCPP_ERROR(this->get_logger(), "Tf lookup failed %s", ex.what());
-            delete octree;
-            io_mutex.unlock();
-            return;
-        }
-        Eigen::Quaternionf q_global(
-                global_point.orientation.w,
-                global_point.orientation.x,
-                global_point.orientation.y,
-                global_point.orientation.z);
-        Eigen::Vector3f t_global(
-                global_point.position.x,
-                global_point.position.y,
-                global_point.position.z);
-        Eigen::Affine3f base_to_global = Eigen::Affine3f::Identity();
-        base_to_global.translate(t_global);
-        base_to_global.rotate(q_global);
-        Eigen::Affine3f delta_transform = base_to_global * x_to_base.inverse();
-        for(auto it = octree->begin_leafs(); it != octree->end_leafs(); ++it){
-            if(octree->isNodeOccupied(*it)){
-                float x = it.getX();
-                float y = it.getY();
-                float z = it.getZ();
-                raw_cloud.push_back(pcl::PointXYZ(x, y, z));
-            }
-            /*
-            else{
-                float x = it.getX();
-                float y = it.getY();
-                float z = it.getZ();
-                raw_del_cloud.push_back(pcl::PointXYZ(x, y, z));
-            }
-            */
-        }
-        delete octree;
-        pcl::transformPointCloud(raw_cloud, input_cloud, delta_transform);
-        pcl::transformPointCloud(raw_del_cloud, input_del_cloud, delta_transform);
-        for(auto &p : input_cloud.points){
-            int64_t x_point = p.x * (float) scalar;
-            int64_t y_point = p.y * (float) scalar;
-            int64_t z_point = p.z * (float) scalar;
-            p.x = x_point;
-            p.y = y_point;
-            p.z = z_point;
-            dvg_insert(graph, x_point, y_point, z_point);
-            /*
-            float x_dist = x_point - global_point.position.x * (float) scalar;
-            float y_dist = y_point - global_point.position.y * (float) scalar;
-            if(x_dist * x_dist + y_dist * y_dist > (1.0f * (float)scalar) * (1.0f * (float) scalar)){
-                dvg_insert(graph, x_point, y_point, z_point);
-            }
-            */
-        }
-        /*
-        for(auto &p : input_del_cloud.points){
-            int64_t x_point = p.x * (float) scalar;
-            int64_t y_point = p.y * (float) scalar;
-            int64_t z_point = p.z * (float) scalar;
-            p.x = x_point;
-            p.y = y_point;
-            p.z = z_point;
-            dvg_delete(graph, x_point, y_point, z_point);
-        }
-        */
-        /*
-        if(input_cloud.empty()){
-            RCLCPP_ERROR(this->get_logger(), "input octomap empty!");
-            io_mutex.unlock();
-            return;
-        }
-        for(const auto &p : input_cloud.points){
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
-            //dvg_insert(graph, x_point, y_point, z_point);
-        }
-        for(const auto &p : del_cloud.points){
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
-            //dvg_delete(graph, x_point, y_point, z_point);
-        } 
-        
-        if(map_cloud.empty()){
-            for (const auto &p : input_cloud.points) { 
-                dvg_insert(graph, p.x, p.y, p.z);
-            }
-            const auto end = std::chrono::steady_clock::now();
-            auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            RCLCPP_INFO(this->get_logger(), "entering the octomap took %ld ms", diff.count());
-            io_mutex.unlock();
-            return;
-        }
-        
-        //REWRITE. JUST CONVERT TO POINTCLOUD AND INSERT THOSE POINTS FOR NOW
-        //WITH A INSERTION POINTCLOUD AND A DELETION POINTCLOUD
-        //THE POSE CORRECTION WILL BE HANDLED WITH A DEDICATED ICP FUNCTION ON A
-        //RAW POINTCOULD
-        
-        pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
-        Eigen::Matrix4f corrective_transform;
-        bool converged = run_icp(input_cloud, map_cloud, &corrected_cloud, &corrective_transform);
-        if(!converged){
-            RCLCPP_ERROR(this->get_logger(), "Error in insertion of the octomap! Localization required!");
-            io_mutex.unlock();
-            return;
-        }
-        for(const auto &p : corrected_cloud.points){
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
-            dvg_insert(graph, x_point, y_point, z_point);
-        }
-        
-        for(const auto &p : input_del_cloud.points){
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
-            dvg_delete(graph, x_point, y_point, z_point);
-        }
-        
-        global_point.position.x += corrective_transform(0,3) / (float)scalar;
-        global_point.position.y += corrective_transform(1,3) / (float)scalar;
-        global_point.position.z += corrective_transform(2,3) / (float)scalar;
-        Eigen::Matrix3f rotation = corrective_transform.block<3,3>(0,0);
-        Eigen::Quaternionf q_correction(rotation);
-        Eigen::Quaternionf q_current(
-                global_point.orientation.w,
-                global_point.orientation.x,
-                global_point.orientation.y,
-                global_point.orientation.z);
-        Eigen::Quaternionf q_corrected = (q_correction * q_current).normalized();
-        global_point.orientation.x = q_corrected.x();
-        global_point.orientation.y = q_corrected.y();
-        global_point.orientation.z = q_corrected.z();
-        global_point.orientation.w = q_corrected.w();
-        
-        */
-        const auto end = std::chrono::steady_clock::now();
-        auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        RCLCPP_INFO(this->get_logger(), "entering the octomap took %ld ms", diff.count());
-        io_mutex.unlock();
     }
     std::mutex nav_mutex;
     static void nav_callback(DvgSlam* self,
