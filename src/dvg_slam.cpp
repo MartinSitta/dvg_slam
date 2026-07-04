@@ -130,6 +130,7 @@ class DvgSlam : public rclcpp::Node{
         this->declare_parameter<int>("wavefront_greedy_mesher", 0);
         this->declare_parameter<int>("raycast_enable", 0);
         this->declare_parameter<bool>("icp_gate_bypass", false);
+        this->declare_parameter<bool>("adaptive_thresh_bypass", false);
         this->render_distance_horizontal = this->get_parameter("render_distance_horizontal").as_int();
         this->render_distance_vertical = this->get_parameter("render_distance_vertical").as_int();
         this->obj_filepath = this->get_parameter("obj_filepath").as_string();
@@ -177,6 +178,7 @@ class DvgSlam : public rclcpp::Node{
         }
         RCLCPP_INFO(this->get_logger(), "initializing topics\n");
         this->icp_gate_bypass = this->get_parameter("icp_gate_bypass").as_bool();
+        this->adaptive_thresh_bypass = this->get_parameter("adaptive_thresh_bypass").as_bool();
         rclcpp::sleep_for(std::chrono::seconds(5));
         publisher_ = this->create_publisher<mesh_msgs::msg::MeshGeometryStamped>(out_topic, 1);
         mesh_timer = this->create_wall_timer(
@@ -223,7 +225,7 @@ class DvgSlam : public rclcpp::Node{
         last_processed_octomap_msg = std::chrono::steady_clock::now();
         rclcpp::sleep_for(std::chrono::milliseconds(500));
         last_processed_pointcloud_msg = std::chrono::steady_clock::now();
-        trajectory_log_file.open("/home/martin/SLAM-datasets/schlachte_dvg_estimated.csv");
+        trajectory_log_file.open("/home/martin/SLAM-datasets/dagstuhl_dvg_estimated.csv");
 
         trajectory_log_file
             << "index,timestamp,x,y,z,qx,qy,qz,qw\n";
@@ -1902,16 +1904,31 @@ class DvgSlam : public rclcpp::Node{
         Eigen::AngleAxisf angle_axis(R);
         float rotation_angle = std::abs(angle_axis.angle());
 
-        if((fitness > dynamic_map_entry_cap ||
+        RCLCPP_INFO(
+            this->get_logger(),
+            "scan gate: rot_corr_deg=%f trans_corr_m=%f fitness=%f cap=%f reject_rot=%d reject_trans=%d",
+            rotation_angle * 180.0f / static_cast<float>(M_PI),
+            correction_magnitude / static_cast<float>(scalar),
+            fitness,
+            dynamic_map_entry_cap,
+            rotation_angle > 0.35f,
+            correction_magnitude > 1.0f * static_cast<float>(scalar));
+
+        if((((fitness > dynamic_map_entry_cap) && !adaptive_thresh_bypass) ||
         correction_magnitude > 1.0f * (float)scalar ||
         rotation_angle > 0.35f) && !icp_gate_bypass){
             RCLCPP_INFO(this->get_logger(), "ICP correction rejected");
-            dynamic_map_entry_cap = dynamic_map_entry_cap * 1.05f;
+            if (!adaptive_thresh_bypass) {
+                dynamic_map_entry_cap = dynamic_map_entry_cap * 1.05f;
+            }
+            write_estimated_trajectory_row(msg);
             io_mutex.unlock();
             return;
         }
-        dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
 
+        if(!adaptive_thresh_bypass){
+            dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
+        }
         //RCLCPP_WARN(this->get_logger(), "ICP DISABLED!");
         
 
@@ -2323,6 +2340,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
 
         trajectory_log_file
             << trajectory_scan_index << ","
+            << std::fixed << std::setprecision(9)
             << rclcpp::Time(msg->header.stamp).seconds() << ","
             << global_point.position.x << ","
             << global_point.position.y << ","
@@ -2382,6 +2400,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
     bool first_call_pc_in = true;
     rclcpp::Service<dvg_slam::srv::GetPath>::SharedPtr service;
     bool icp_gate_bypass;
+    bool adaptive_thresh_bypass;
     std::ofstream trajectory_log_file;
     size_t trajectory_scan_index = 1;  // Schlachte uses scan001..scan019
     float icp_sample_ratio = 0.1f; //sample ratio as percentage of pointcloud size

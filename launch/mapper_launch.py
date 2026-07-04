@@ -26,7 +26,8 @@ def generate_launch_description():
                 'ros2_msg_greedy_mesher': 1,
                 'wavefront_greedy_mesher': 1,
                 'raycast_enable': 0,
-                'icp_gate_bypass': True
+                'icp_gate_bypass': False,
+                'adaptive_thresh_bypass': True
             }],
         )
     ])
