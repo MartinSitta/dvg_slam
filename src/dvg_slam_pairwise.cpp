@@ -220,6 +220,23 @@ class DvgSlam : public rclcpp::Node{
         last_processed_octomap_msg = std::chrono::steady_clock::now();
         rclcpp::sleep_for(std::chrono::milliseconds(500));
         last_processed_pointcloud_msg = std::chrono::steady_clock::now();
+
+        trajectory_log_file.open("/home/martin/SLAM-datasets/schlachte_dvg_estimated.csv");
+
+        trajectory_log_file
+            << "index,timestamp,x,y,z,qx,qy,qz,qw\n";
+
+        trajectory_log_file.flush();
+
+         RCLCPP_INFO(
+        this->get_logger(),
+        "ICP params: max_corr=%f m, iterations=%d, trans_eps=%e, fitness_eps=%e",
+        icp_max_correspondence_m,
+        icp_max_iterations,
+        icp_trans_epsilon,
+        icp_fitness_epsilon);
+
+
         RCLCPP_INFO(this->get_logger(), "starting the mapper\n");
         graph = dvg_init(this->chunk_amount);
         assert(graph != NULL);
@@ -1731,6 +1748,7 @@ class DvgSlam : public rclcpp::Node{
         }
     }
     void timer_callback(){
+        return;
         io_mutex.lock();
         RCLCPP_WARN(this->get_logger(), "generating mesh");
         if(graph->current_chunk_index == 0)
@@ -1751,53 +1769,7 @@ class DvgSlam : public rclcpp::Node{
         RCLCPP_INFO(this->get_logger(), "generating the mesh took %ld ms", diff.count());
         io_mutex.unlock();
     }
-    bool has_odom = false;
-    Dvg_t* graph;
-    std::string topic;
-    std::string del_topic;
-    std::string frame_id = "odom";
-    std::string odom_topic = "";
-    std::string out_topic = "";
-    std::string octomap_binary_topic = "";
-    uint32_t chunk_amount;
-    uint32_t scalar;
-    std::string obj_filepath;
-    rclcpp::TimerBase::SharedPtr mesh_timer;
-    rclcpp::TimerBase::SharedPtr pose_timer;
-    rclcpp::TimerBase::SharedPtr nav_timer;
-    rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr publisher_;
-    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr publisher_two;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_debug_publisher;
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
-    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_two; 
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_three;
-    rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_binary_subscription;
-    size_t count_;
-    std::mutex io_mutex;
-    geometry_msgs::msg::Pose global_point;
-    geometry_msgs::msg::Pose current_odom_msg_pose;
-    geometry_msgs::msg::Pose prev_odom_msg_pose;
-    std::shared_ptr<rclcpp::Clock> clock_;
-   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-    uint32_t render_distance_horizontal = 1;
-    uint32_t render_distance_vertical = 1;
-    int v2_mesher = 0;
-    int ros2_msg_greedy_mesher = 0;
-    int wavefront_greedy_mesher = 0;
-    int raycast_enable = 0;
-    int64_t prev_x = 0;
-    int64_t prev_y = 0;
-    int64_t prev_z = 0;
-    float dynamic_map_entry_cap = 0.1;
-    std::chrono::steady_clock::time_point last_processed_octomap_msg;
-    std::chrono::steady_clock::time_point last_processed_pointcloud_msg;
-    bool first_call_pc_in = true;
-    rclcpp::Service<dvg_slam::srv::GetPath>::SharedPtr service;
-    bool icp_gate_bypass;
-    // Holds the previous full-resolution transformed scan for scan-to-scan ICP.
-    pcl::PointCloud<pcl::PointXYZ>::Ptr previous_full_scan;
+    
     void point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {
         std::unique_lock<std::mutex> lock(io_mutex);
@@ -1939,7 +1911,7 @@ class DvgSlam : public rclcpp::Node{
             }
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
-
+            write_estimated_trajectory_row(msg);
             return;
         }
 
@@ -1976,7 +1948,7 @@ class DvgSlam : public rclcpp::Node{
                 new pcl::PointCloud<pcl::PointXYZ>(*transformed_cloud));
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
-
+            write_estimated_trajectory_row(msg);
             return;
         }
 
@@ -2007,7 +1979,7 @@ class DvgSlam : public rclcpp::Node{
                 new pcl::PointCloud<pcl::PointXYZ>(*transformed_cloud));
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
-
+            write_estimated_trajectory_row(msg);
             return;
         }
 
@@ -2110,6 +2082,7 @@ class DvgSlam : public rclcpp::Node{
             this->get_logger(),
             "entering the pointcloud took %ld ms",
             static_cast<long>(pc_diff.count()));
+            write_estimated_trajectory_row(msg);
     }
 
     Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
@@ -2127,7 +2100,7 @@ class DvgSlam : public rclcpp::Node{
             pose.position.y,
             pose.position.z
         );
-
+        
         return Eigen::Translation3f(t) * q;
     }
 
@@ -2246,14 +2219,14 @@ class DvgSlam : public rclcpp::Node{
         // Tighter correspondence distance than scan-to-map: frame-to-frame
         // motion is small, and a tight radius avoids spurious matches
         // between full-resolution clouds that are otherwise very similar.
-        icp.setMaxCorrespondenceDistance((float) scalar * 0.1f);
-        icp.setTransformationEpsilon(1e-6);//stop iterating when transform delta below
-        icp.setEuclideanFitnessEpsilon(1e-5);//stop iterating when mean squared error below
+        icp.setMaxCorrespondenceDistance((float) scalar * icp_max_correspondence_m);
+        icp.setTransformationEpsilon(icp_trans_epsilon);//stop iterating when transform delta below
+        icp.setEuclideanFitnessEpsilon(icp_fitness_epsilon);//stop iterating when mean squared error below
         // Full-resolution scan-to-scan correspondences converge faster and
         // more reliably than scan-to-map with a downsampled source, so fewer
         // iterations are needed; this also keeps per-frame cost down given
         // both clouds are now full resolution.
-        icp.setMaximumIterations(20);
+        icp.setMaximumIterations(icp_max_iterations);
         icp.setInputSource(source);
         icp.setInputTarget(target);
         /*
@@ -2463,6 +2436,84 @@ class DvgSlam : public rclcpp::Node{
         voxel_hash_map_free(nodes);
         self->nav_mutex.unlock();
     }
+
+    void write_estimated_trajectory_row(const sensor_msgs::msg::PointCloud2::SharedPtr msg){
+        if (!trajectory_log_file.is_open()) {
+            return;
+        }
+
+        trajectory_log_file
+            << trajectory_scan_index << ","
+            << rclcpp::Time(msg->header.stamp).seconds() << ","
+            << global_point.position.x << ","
+            << global_point.position.y << ","
+            << global_point.position.z << ","
+            << global_point.orientation.x << ","
+            << global_point.orientation.y << ","
+            << global_point.orientation.z << ","
+            << global_point.orientation.w << "\n";
+
+        trajectory_log_file.flush();
+
+        trajectory_scan_index++;
+    }
+
+
+    bool has_odom = false;
+    Dvg_t* graph;
+    std::string topic;
+    std::string del_topic;
+    std::string frame_id = "odom";
+    std::string odom_topic = "";
+    std::string out_topic = "";
+    std::string octomap_binary_topic = "";
+    uint32_t chunk_amount;
+    uint32_t scalar;
+    std::string obj_filepath;
+    rclcpp::TimerBase::SharedPtr mesh_timer;
+    rclcpp::TimerBase::SharedPtr pose_timer;
+    rclcpp::TimerBase::SharedPtr nav_timer;
+    rclcpp::Publisher<mesh_msgs::msg::MeshGeometryStamped>::SharedPtr publisher_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr publisher_two;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_debug_publisher;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_two; 
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_three;
+    rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_binary_subscription;
+    size_t count_;
+    std::mutex io_mutex;
+    geometry_msgs::msg::Pose global_point;
+    geometry_msgs::msg::Pose current_odom_msg_pose;
+    geometry_msgs::msg::Pose prev_odom_msg_pose;
+    std::shared_ptr<rclcpp::Clock> clock_;
+   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    uint32_t render_distance_horizontal = 1;
+    uint32_t render_distance_vertical = 1;
+    int v2_mesher = 0;
+    int ros2_msg_greedy_mesher = 0;
+    int wavefront_greedy_mesher = 0;
+    int raycast_enable = 0;
+    int64_t prev_x = 0;
+    int64_t prev_y = 0;
+    int64_t prev_z = 0;
+    float dynamic_map_entry_cap = 0.1;
+    std::chrono::steady_clock::time_point last_processed_octomap_msg;
+    std::chrono::steady_clock::time_point last_processed_pointcloud_msg;
+    bool first_call_pc_in = true;
+    rclcpp::Service<dvg_slam::srv::GetPath>::SharedPtr service;
+    bool icp_gate_bypass;
+    // Holds the previous full-resolution transformed scan for scan-to-scan ICP.
+    pcl::PointCloud<pcl::PointXYZ>::Ptr previous_full_scan;
+    std::ofstream trajectory_log_file;
+    size_t trajectory_scan_index = 1;  // Schlachte uses scan001..scan019
+    float icp_sample_ratio = 0.1f; //sample ratio as percentage of pointcloud size
+    float icp_max_correspondence_m = 0.1f; //max correspondence range in meters
+    int icp_max_iterations = 5;
+    float icp_trans_epsilon = 1e-6;
+    float icp_fitness_epsilon = 1e-5;
+    double local_point_cloud_radius = 20.0;
 };
 
 int main(int argc, char ** argv)
