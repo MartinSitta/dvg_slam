@@ -6,6 +6,7 @@
 #include <rclcpp/publisher.hpp>
 #include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include <string>
+#include <iomanip>
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include <climits>
@@ -2444,6 +2445,7 @@ class DvgSlam : public rclcpp::Node{
 
         trajectory_log_file
             << trajectory_scan_index << ","
+            << std::fixed << std::setprecision(9)
             << rclcpp::Time(msg->header.stamp).seconds() << ","
             << global_point.position.x << ","
             << global_point.position.y << ","
