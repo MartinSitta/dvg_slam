@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <pcl/impl/point_types.hpp>
+#include <rclcpp/logging.hpp>
 #include <rclcpp/publisher.hpp>
 #include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include <string>
@@ -1929,11 +1930,12 @@ class DvgSlam : public rclcpp::Node{
         if(!adaptive_thresh_bypass){
             dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
         }
-        //RCLCPP_WARN(this->get_logger(), "ICP DISABLED!");
+
         
 
         // Apply correction to the transformed cloud.
         // corrective_transform is in scaled map units.
+        //RCLCPP_WARN(this->get_logger(), "POINT CLOUD CORRECTION DISABLED!");
         pcl::transformPointCloud(*transformed_cloud, *transformed_cloud, corrective_transform);
         // Build correction transform for the robot pose.
         Eigen::Affine3f T_correction = Eigen::Affine3f::Identity();
@@ -1950,6 +1952,7 @@ class DvgSlam : public rclcpp::Node{
         T_global = T_correction * T_global;
 
         // Write back into global_point.
+        //RCLCPP_WARN(this->get_logger(), "POSE CORRECTION DISABLED!");
         eigen_to_pose(T_global, global_point);
 
 
