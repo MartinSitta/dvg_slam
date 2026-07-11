@@ -222,14 +222,27 @@ class DvgSlam : public rclcpp::Node{
         rclcpp::sleep_for(std::chrono::milliseconds(500));
         last_processed_pointcloud_msg = std::chrono::steady_clock::now();
 
-        trajectory_log_file.open("/home/martin/SLAM-datasets/schlachte_dvg_estimated.csv");
+        trajectory_log_file.open("/home/martin/SLAM-datasets/pairwise_traj_estimated.csv");
 
         trajectory_log_file
             << "index,timestamp,x,y,z,qx,qy,qz,qw\n";
 
         trajectory_log_file.flush();
 
-         RCLCPP_INFO(
+        performance_log_file.open("/home/martin/SLAM-datasets/pairwise_performance.csv");
+
+        performance_log_file
+            << "index,timestamp,"
+            << "pose_correction_ms,"
+            << "local_map_extraction_ms,"
+            << "pure_icp_ms,"
+            << "sensor_scan_points,"
+            << "reference_target_points,"
+            << "icp_fitness,"
+            << "accepted\n";
+
+
+        RCLCPP_INFO(
         this->get_logger(),
         "ICP params: max_corr=%f m, iterations=%d, trans_eps=%e, fitness_eps=%e",
         icp_max_correspondence_m,
@@ -1770,6 +1783,13 @@ class DvgSlam : public rclcpp::Node{
         RCLCPP_INFO(this->get_logger(), "generating the mesh took %ld ms", diff.count());
         io_mutex.unlock();
     }
+
+    static double elapsed_ms(
+        const std::chrono::steady_clock::time_point& start,
+        const std::chrono::steady_clock::time_point& end)
+    {
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
     
     void point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {
@@ -1777,6 +1797,36 @@ class DvgSlam : public rclcpp::Node{
 
         const auto pose_start = std::chrono::steady_clock::now();
 
+        double local_map_extraction_ms = 0.0;  // Pairwise ICP has no local DVG extraction.
+        double pure_icp_ms = 0.0;
+        double pose_correction_ms = 0.0;
+
+        std::size_t sensor_scan_points = 0;
+        std::size_t reference_target_points = 0;
+
+        auto write_performance_row =
+            [&](double pose_correction_ms_value,
+                double local_map_extraction_ms_value,
+                double pure_icp_ms_value,
+                std::size_t sensor_scan_points_value,
+                std::size_t reference_target_points_value,
+                float icp_fitness_value,
+                bool accepted)
+        {
+            performance_log_file
+                << trajectory_scan_index << ","
+                << std::fixed << std::setprecision(9)
+                << rclcpp::Time(msg->header.stamp).seconds() << ","
+                << std::setprecision(6)
+                << pose_correction_ms_value << ","
+                << local_map_extraction_ms_value << ","
+                << pure_icp_ms_value << ","
+                << sensor_scan_points_value << ","
+                << reference_target_points_value << ","
+                << icp_fitness_value << ","
+                << static_cast<int>(accepted)
+                << "\n";
+        };
         auto time_since_last_processed_pointcloud =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 pose_start - last_processed_pointcloud_msg);
@@ -1885,6 +1935,12 @@ class DvgSlam : public rclcpp::Node{
             return;
         }
 
+        sensor_scan_points = transformed_cloud->points.size();
+
+        if (previous_full_scan) {
+            reference_target_points = previous_full_scan->points.size();
+        }
+
         // First scan:
         // - seed previous_full_scan with the full-density transformed scan
         // - seed the DVG map with a deduplicated version
@@ -1912,6 +1968,18 @@ class DvgSlam : public rclcpp::Node{
             }
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
+            const auto pose_end = std::chrono::steady_clock::now();
+
+            pose_correction_ms = elapsed_ms(pose_start, pose_end);
+
+            write_performance_row(
+    0.0,
+    local_map_extraction_ms,
+    0.0,
+    sensor_scan_points,
+    0,
+    -1.0f,
+    false);
             write_estimated_trajectory_row(msg);
             return;
         }
@@ -1919,6 +1987,8 @@ class DvgSlam : public rclcpp::Node{
         pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
         Eigen::Matrix4f corrective_transform = Eigen::Matrix4f::Identity();
         float fitness = 1000.0f;
+
+        reference_target_points = previous_full_scan->points.size();
 
         const auto icp_start = std::chrono::steady_clock::now();
 
@@ -1931,14 +2001,12 @@ class DvgSlam : public rclcpp::Node{
 
         const auto icp_end = std::chrono::steady_clock::now();
 
-        auto icp_diff =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                icp_end - icp_start);
+        pure_icp_ms = elapsed_ms(icp_start, icp_end);
 
         RCLCPP_INFO(
             this->get_logger(),
-            "scan-to-scan ICP took %ld ms",
-            static_cast<long>(icp_diff.count()));
+            "scan-to-scan ICP took %.3f ms",
+            pure_icp_ms);
 
         if (!converged) {
             RCLCPP_ERROR(this->get_logger(), "pose correction failed!");
@@ -1947,6 +2015,21 @@ class DvgSlam : public rclcpp::Node{
             // Otherwise the next scan would match against an increasingly stale scan.
             previous_full_scan = pcl::PointCloud<pcl::PointXYZ>::Ptr(
                 new pcl::PointCloud<pcl::PointXYZ>(*transformed_cloud));
+
+            const auto pose_end = std::chrono::steady_clock::now();
+
+            pose_correction_ms = elapsed_ms(pose_start, pose_end);
+
+            write_performance_row(
+                pose_correction_ms,
+                local_map_extraction_ms,
+                pure_icp_ms,
+                sensor_scan_points,
+                reference_target_points,
+                fitness,
+                false);
+
+
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
             write_estimated_trajectory_row(msg);
@@ -1980,6 +2063,20 @@ class DvgSlam : public rclcpp::Node{
                 new pcl::PointCloud<pcl::PointXYZ>(*transformed_cloud));
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
+
+            const auto pose_end = std::chrono::steady_clock::now();
+
+            pose_correction_ms = elapsed_ms(pose_start, pose_end);
+
+            write_performance_row(
+                pose_correction_ms,
+                local_map_extraction_ms,
+                pure_icp_ms,
+                sensor_scan_points,
+                reference_target_points,
+                fitness,
+                false);
+
             write_estimated_trajectory_row(msg);
             return;
         }
@@ -2024,17 +2121,23 @@ class DvgSlam : public rclcpp::Node{
 
         const auto pose_end = std::chrono::steady_clock::now();
 
-        auto pose_diff =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                pose_end - pose_start);
+        pose_correction_ms = elapsed_ms(pose_start, pose_end);
 
         RCLCPP_INFO(
             this->get_logger(),
-            "pointcloud pose pipeline took %ld ms",
-            static_cast<long>(pose_diff.count()));
+            "pointcloud pose pipeline took %.3f ms",
+            pose_correction_ms);
 
         last_processed_pointcloud_msg = pose_end;
 
+        write_performance_row(
+    pose_correction_ms,
+    local_map_extraction_ms,
+    pure_icp_ms,
+    sensor_scan_points,
+    reference_target_points,
+    fitness,
+    true);
         // Only now de-duplicate for DVG map update.
         // ICP already used the full-density scan.
         pcl::PointCloud<pcl::PointXYZ>::Ptr map_update_cloud =
@@ -2509,6 +2612,7 @@ class DvgSlam : public rclcpp::Node{
     // Holds the previous full-resolution transformed scan for scan-to-scan ICP.
     pcl::PointCloud<pcl::PointXYZ>::Ptr previous_full_scan;
     std::ofstream trajectory_log_file;
+    std::ofstream performance_log_file;
     size_t trajectory_scan_index = 1;  // Schlachte uses scan001..scan019
     float icp_sample_ratio = 0.1f; //sample ratio as percentage of pointcloud size
     float icp_max_correspondence_m = 0.1f; //max correspondence range in meters
