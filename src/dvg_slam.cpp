@@ -226,12 +226,27 @@ class DvgSlam : public rclcpp::Node{
         last_processed_octomap_msg = std::chrono::steady_clock::now();
         rclcpp::sleep_for(std::chrono::milliseconds(500));
         last_processed_pointcloud_msg = std::chrono::steady_clock::now();
-        trajectory_log_file.open("/home/martin/SLAM-datasets/dagstuhl_dvg_estimated.csv");
+        trajectory_log_file.open("/home/martin/SLAM-datasets/dvg_traj_estimated.csv");
 
         trajectory_log_file
             << "index,timestamp,x,y,z,qx,qy,qz,qw\n";
 
         trajectory_log_file.flush();
+
+        performance_log_file.open("/home/martin/SLAM-datasets/dvg_performance.csv");
+
+        performance_log_file
+            << "index,timestamp,"
+            << "pose_correction_ms,"
+            << "local_map_extraction_ms,"
+            << "pure_icp_ms,"
+            << "sensor_scan_points,"
+            << "reference_target_points,"
+            << "icp_fitness,"
+            << "accepted\n";
+
+        performance_log_file.flush();
+
         RCLCPP_INFO(this->get_logger(), "starting the mapper\n");
         graph = dvg_init(this->chunk_amount);
         assert(graph != NULL);
@@ -1779,54 +1794,112 @@ class DvgSlam : public rclcpp::Node{
         RCLCPP_INFO(this->get_logger(), "generating the mesh took %ld ms", diff.count());
         io_mutex.unlock();
     }
+
+    static double elapsed_ms(
+        const std::chrono::steady_clock::time_point& start,
+        const std::chrono::steady_clock::time_point& end)
+    {
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    }
+
     void point_cloud_in_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
-    {        
+    {
         io_mutex.lock();
+
         const auto pose_start = std::chrono::steady_clock::now();
-        auto time_since_last_processed_pointcloud = std::chrono::duration_cast<std::chrono::milliseconds>(pose_start - last_processed_pointcloud_msg);
-        if(time_since_last_processed_pointcloud < std::chrono::milliseconds{50}){
+
+        double pose_correction_ms = 0.0;
+        double local_map_extraction_ms = 0.0;
+        double pure_icp_ms = 0.0;
+
+        std::size_t sensor_scan_points = 0;
+        std::size_t reference_target_points = 0;
+
+        auto write_performance_row =
+            [&](double pose_correction_ms_value,
+                double local_map_extraction_ms_value,
+                double pure_icp_ms_value,
+                std::size_t sensor_scan_points_value,
+                std::size_t reference_target_points_value,
+                float icp_fitness_value,
+                bool accepted)
+        {
+            performance_log_file
+                << trajectory_scan_index << ","
+                << std::fixed << std::setprecision(9)
+                << rclcpp::Time(msg->header.stamp).seconds() << ","
+                << std::setprecision(6)
+                << pose_correction_ms_value << ","
+                << local_map_extraction_ms_value << ","
+                << pure_icp_ms_value << ","
+                << sensor_scan_points_value << ","
+                << reference_target_points_value << ","
+                << icp_fitness_value << ","
+                << static_cast<int>(accepted)
+                << "\n";
+        };
+
+        auto time_since_last_processed_pointcloud =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                pose_start - last_processed_pointcloud_msg);
+
+        if (time_since_last_processed_pointcloud < std::chrono::milliseconds{50}) {
             io_mutex.unlock();
             return;
         }
+
         geometry_msgs::msg::TransformStamped tf_sensor_to_base;
-        try{
+
+        try {
             tf_sensor_to_base = tf_buffer_->lookupTransform(
-                    "base_link",
-                    msg->header.frame_id,
-                    msg->header.stamp,
-                    rclcpp::Duration::from_seconds(0.1));
+                "base_link",
+                msg->header.frame_id,
+                msg->header.stamp,
+                rclcpp::Duration::from_seconds(0.1));
         }
-        catch(const tf2::TransformException& ex){
+        catch (const tf2::TransformException& ex) {
             RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s", ex.what());
             io_mutex.unlock();
             return;
         }
-        Eigen::Affine3f sensor_to_base = tf2::transformToEigen(tf_sensor_to_base.transform).cast<float>();
+
+        Eigen::Affine3f sensor_to_base =
+            tf2::transformToEigen(tf_sensor_to_base.transform).cast<float>();
+
         Eigen::Quaternionf q(
-                global_point.orientation.w,
-                global_point.orientation.x,
-                global_point.orientation.y,
-                global_point.orientation.z);
+            global_point.orientation.w,
+            global_point.orientation.x,
+            global_point.orientation.y,
+            global_point.orientation.z);
+
         q.normalize();
 
         Eigen::Vector3f t(
-                global_point.position.x,
-                global_point.position.y,
-                global_point.position.z);
+            global_point.position.x,
+            global_point.position.y,
+            global_point.position.z);
+
         Eigen::Affine3f base_to_pose = Eigen::Affine3f::Identity();
         base_to_pose = Eigen::Translation3f(t) * q;
-        Eigen::Affine3f combined_transform = base_to_pose * sensor_to_base; 
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        Eigen::Affine3f combined_transform = base_to_pose * sensor_to_base;
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(
+            new pcl::PointCloud<pcl::PointXYZ>);
+
         pcl::fromROSMsg(*msg, *raw_cloud);
+
         std::vector<int> nan_indices;
         pcl::removeNaNFromPointCloud(*raw_cloud, *raw_cloud, nan_indices);
-        if(raw_cloud->empty()){
+
+        if (raw_cloud->empty()) {
             RCLCPP_WARN(this->get_logger(), "pointcloud empty after NaN removal!");
             io_mutex.unlock();
             return;
         }
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dedup_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dedup_cloud(
+            new pcl::PointCloud<pcl::PointXYZ>);
 
         VoxelHashMap_t* hashmap = voxel_hash_map_init(1 << 17, 30, 0.5f);
 
@@ -1851,57 +1924,114 @@ class DvgSlam : public rclcpp::Node{
             return;
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::transformPointCloud(*dedup_cloud, *transformed_cloud, combined_transform);
-        
+        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(
+            new pcl::PointCloud<pcl::PointXYZ>);
 
-        for(auto &p : transformed_cloud->points){
-            p.x = (p.x * (float)scalar);
-            p.y = (p.y * (float)scalar);
-            p.z = (p.z * (float)scalar);
-        } 
-        //pcl::fromROSMsg(*msg, *raw_cloud);
-        pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::transformPointCloud(*dedup_cloud, *transformed_cloud, combined_transform);
+
+        for (auto& p : transformed_cloud->points) {
+            p.x = p.x * static_cast<float>(scalar);
+            p.y = p.y * static_cast<float>(scalar);
+            p.z = p.z * static_cast<float>(scalar);
+        }
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(
+            new pcl::PointCloud<pcl::PointXYZ>);
+
         pcl::RandomSample<pcl::PointXYZ> rs;
         rs.setInputCloud(transformed_cloud);
-        //rs.setSample(raw_cloud->size() * 0.05f);
+
         int sample_count = static_cast<int>(
             static_cast<float>(transformed_cloud->size()) * icp_sample_ratio);
 
         sample_count = std::max(sample_count, 1000);
+
         rs.setSeed(42);
         rs.setSample(sample_count);
         rs.filter(*downsampled_cloud);
-        pcl::PointCloud<pcl::PointXYZ> map_cloud = get_local_pointcloud(global_point, local_point_cloud_radius);
-        if(map_cloud.empty() || first_call_pc_in){
+
+        sensor_scan_points = downsampled_cloud->points.size();
+
+        const auto local_map_start = std::chrono::steady_clock::now();
+
+        pcl::PointCloud<pcl::PointXYZ> map_cloud =
+            get_local_pointcloud(global_point, local_point_cloud_radius);
+
+        const auto local_map_end = std::chrono::steady_clock::now();
+
+        local_map_extraction_ms = elapsed_ms(local_map_start, local_map_end);
+        reference_target_points = map_cloud.points.size();
+
+        if (map_cloud.empty() || first_call_pc_in) {
             first_call_pc_in = false;
 
-            for(const auto &p : transformed_cloud->points){
+            for (const auto& p : transformed_cloud->points) {
                 int64_t x_point = p.x;
                 int64_t y_point = p.y;
                 int64_t z_point = p.z;
+
                 dvg_insert(graph, x_point, y_point, z_point);
             }
 
             last_processed_pointcloud_msg = std::chrono::steady_clock::now();
-            
+
+            write_performance_row(
+                0.0,
+                local_map_extraction_ms,
+                0.0,
+                sensor_scan_points,
+                reference_target_points,
+                -1.0f,
+                false);
+
             write_estimated_trajectory_row(msg);
 
             io_mutex.unlock();
             return;
         }
+
         pcl::PointCloud<pcl::PointXYZ> corrected_cloud;
         Eigen::Matrix4f corrective_transform;
         float fitness = 1000.0f;
-        bool converged = run_icp(*downsampled_cloud, map_cloud, &corrected_cloud, &corrective_transform, &fitness);
-        if(!converged){
+
+        const auto icp_start = std::chrono::steady_clock::now();
+
+        bool converged = run_icp(
+            *downsampled_cloud,
+            map_cloud,
+            &corrected_cloud,
+            &corrective_transform,
+            &fitness);
+
+        const auto icp_end = std::chrono::steady_clock::now();
+
+        pure_icp_ms = elapsed_ms(icp_start, icp_end);
+
+        if (!converged) {
             RCLCPP_ERROR(this->get_logger(), "pose correction failed!");
+
+            const auto pose_end = std::chrono::steady_clock::now();
+            pose_correction_ms = elapsed_ms(pose_start, pose_end);
+
+            write_performance_row(
+                pose_correction_ms,
+                local_map_extraction_ms,
+                pure_icp_ms,
+                sensor_scan_points,
+                reference_target_points,
+                fitness,
+                false);
+
             io_mutex.unlock();
             return;
         }
-        
-        float correction_magnitude = corrective_transform.block<3,1>(0,3).norm();
-        Eigen::Matrix3f R = corrective_transform.block<3,3>(0,0);
+
+        float correction_magnitude =
+            corrective_transform.block<3, 1>(0, 3).norm();
+
+        Eigen::Matrix3f R =
+            corrective_transform.block<3, 3>(0, 0);
+
         Eigen::AngleAxisf angle_axis(R);
         float rotation_angle = std::abs(angle_axis.angle());
 
@@ -1915,34 +2045,51 @@ class DvgSlam : public rclcpp::Node{
             rotation_angle > 0.35f,
             correction_magnitude > 1.0f * static_cast<float>(scalar));
 
-        if((((fitness > dynamic_map_entry_cap) && !adaptive_thresh_bypass) ||
-        correction_magnitude > 1.0f * (float)scalar ||
-        rotation_angle > 0.35f) && !icp_gate_bypass){
+        if ((((fitness > dynamic_map_entry_cap) && !adaptive_thresh_bypass) ||
+            correction_magnitude > 1.0f * static_cast<float>(scalar) ||
+            rotation_angle > 0.35f) && !icp_gate_bypass)
+        {
             RCLCPP_INFO(this->get_logger(), "ICP correction rejected");
+
             if (!adaptive_thresh_bypass) {
                 dynamic_map_entry_cap = dynamic_map_entry_cap * 1.05f;
             }
+
+            const auto pose_end = std::chrono::steady_clock::now();
+            pose_correction_ms = elapsed_ms(pose_start, pose_end);
+
+            write_performance_row(
+                pose_correction_ms,
+                local_map_extraction_ms,
+                pure_icp_ms,
+                sensor_scan_points,
+                reference_target_points,
+                fitness,
+                false);
+
             write_estimated_trajectory_row(msg);
+
             io_mutex.unlock();
             return;
         }
 
-        if(!adaptive_thresh_bypass){
+        if (!adaptive_thresh_bypass) {
             dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
         }
 
-        
-
         // Apply correction to the transformed cloud.
         // corrective_transform is in scaled map units.
-        //RCLCPP_WARN(this->get_logger(), "POINT CLOUD CORRECTION DISABLED!");
-        pcl::transformPointCloud(*transformed_cloud, *transformed_cloud, corrective_transform);
+        pcl::transformPointCloud(
+            *transformed_cloud,
+            *transformed_cloud,
+            corrective_transform);
+
         // Build correction transform for the robot pose.
         Eigen::Affine3f T_correction = Eigen::Affine3f::Identity();
         T_correction.matrix() = corrective_transform;
 
         // Convert correction translation from scaled map units back to meters.
-        T_correction.translation() /= (float)scalar;
+        T_correction.translation() /= static_cast<float>(scalar);
 
         // Current robot pose in global/map coordinates.
         Eigen::Affine3f T_global = pose_to_eigen(global_point);
@@ -1952,30 +2099,42 @@ class DvgSlam : public rclcpp::Node{
         T_global = T_correction * T_global;
 
         // Write back into global_point.
-        //RCLCPP_WARN(this->get_logger(), "POSE CORRECTION DISABLED!");
         eigen_to_pose(T_global, global_point);
 
+        int64_t robot_point_x =
+            global_point.position.x * static_cast<float>(scalar);
+        int64_t robot_point_y =
+            global_point.position.y * static_cast<float>(scalar);
+        int64_t robot_point_z =
+            global_point.position.z * static_cast<float>(scalar);
 
-        
-
-
-        int64_t robot_point_x = global_point.position.x * (float) scalar;
-        int64_t robot_point_y = global_point.position.y * (float) scalar;
-        int64_t robot_point_z = global_point.position.z * (float) scalar;
         const auto pose_end = std::chrono::steady_clock::now();
-        auto pose_diff = std::chrono::duration_cast<std::chrono::milliseconds>(pose_end - pose_start);
-        RCLCPP_INFO(this->get_logger(), "pose correction took %d ms", pose_diff.count());
+
+        pose_correction_ms = elapsed_ms(pose_start, pose_end);
+
+        RCLCPP_INFO(
+            this->get_logger(),
+            "pose correction took %.3f ms",
+            pose_correction_ms);
+
         last_processed_pointcloud_msg = pose_end;
+
+        write_performance_row(
+            pose_correction_ms,
+            local_map_extraction_ms,
+            pure_icp_ms,
+            sensor_scan_points,
+            reference_target_points,
+            fitness,
+            true);
 
         const auto pc_start = std::chrono::steady_clock::now();
 
-        //RCLCPP_WARN(this->get_logger(), "DYNAMIC OBJECT REMOVAL DISABLED!");
-
-        for (const auto &p : transformed_cloud->points) {
+        for (const auto& p : transformed_cloud->points) {
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
-            
+
             dynamic_object_removal(
                 graph,
                 robot_point_x,
@@ -1986,22 +2145,31 @@ class DvgSlam : public rclcpp::Node{
                 z_point,
                 true,
                 5,
-                scalar
-            );
-            
+                scalar);
         }
-         for(const auto &p : transformed_cloud->points){
+
+        for (const auto& p : transformed_cloud->points) {
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
+
             dvg_insert(graph, x_point, y_point, z_point);
         }
-        write_estimated_trajectory_row(msg);
-        const auto pc_end = std::chrono::steady_clock::now();
-        auto diff = std::chrono::duration_cast<std::chrono::milliseconds>(pc_end - pc_start);
-        RCLCPP_INFO(this->get_logger(), "entering the pointcloud took %d ms", diff.count());
-        io_mutex.unlock();
 
+        write_estimated_trajectory_row(msg);
+
+        const auto pc_end = std::chrono::steady_clock::now();
+
+        auto diff =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                pc_end - pc_start);
+
+        RCLCPP_INFO(
+            this->get_logger(),
+            "entering the pointcloud took %ld ms",
+            static_cast<long>(diff.count()));
+
+        io_mutex.unlock();
     }
 
 Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
@@ -2405,6 +2573,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
     bool icp_gate_bypass;
     bool adaptive_thresh_bypass;
     std::ofstream trajectory_log_file;
+    std::ofstream performance_log_file;
     size_t trajectory_scan_index = 1;  // Schlachte uses scan001..scan019
     float icp_sample_ratio = 0.1f; //sample ratio as percentage of pointcloud size
     float icp_max_correspondence_m = 0.1f; //max correspondence range in meters
