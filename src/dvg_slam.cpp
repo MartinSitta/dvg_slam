@@ -269,18 +269,21 @@ class DvgSlam : public rclcpp::Node{
         if (trajectory_log_file.is_open()) {
             trajectory_log_file.close();
         }
-        RCLCPP_WARN(this->get_logger(), "Publishing final mesh\n");
+
         if(v2_mesher){
+            RCLCPP_WARN(this->get_logger(), "Publishing final v2 mesh\n");
             build_and_publish_mesh_v2(graph, publisher_);
         }
         else{
+            RCLCPP_WARN(this->get_logger(), "Publishing final v1 mesh\n");
             build_and_publish_mesh(graph, publisher_);
         }
-        RCLCPP_WARN(this->get_logger(), "Creating wavefront\n");
         if(v2_mesher){
+            RCLCPP_WARN(this->get_logger(), "Creating v2 wavefront\n");
             write_global_wavefront_v2(graph); 
         }
         else{
+            RCLCPP_WARN(this->get_logger(), "Creating v1 wavefront\n");
             write_global_wavefront(graph); 
         }
         RCLCPP_WARN(this->get_logger(), "Deleting the map model\n");
@@ -1902,8 +1905,12 @@ class DvgSlam : public rclcpp::Node{
             new pcl::PointCloud<pcl::PointXYZ>);
 
         VoxelHashMap_t* hashmap = voxel_hash_map_init(1 << 17, 30, 0.5f);
-
+        float highest_sensor_points_distance = 0.0f;
         for (const auto& p : raw_cloud->points) {
+            float point_dist = p.x * p.x + p.y * p.y + p.z * p.z;
+            if(point_dist > highest_sensor_points_distance){
+                highest_sensor_points_distance = point_dist;
+            }
             int64_t x = static_cast<int64_t>(p.x * static_cast<float>(scalar));
             int64_t y = static_cast<int64_t>(p.y * static_cast<float>(scalar));
             int64_t z = static_cast<int64_t>(p.z * static_cast<float>(scalar));
@@ -1953,9 +1960,10 @@ class DvgSlam : public rclcpp::Node{
         sensor_scan_points = downsampled_cloud->points.size();
 
         const auto local_map_start = std::chrono::steady_clock::now();
-
+        float local_sensor_radius_margin = 1.0f;
+        float scan_radius = std::min(local_point_cloud_radius, sqrtf(highest_sensor_points_distance) + local_sensor_radius_margin);
         pcl::PointCloud<pcl::PointXYZ> map_cloud =
-            get_local_pointcloud(global_point, local_point_cloud_radius);
+            get_local_pointcloud(global_point, scan_radius);
 
         const auto local_map_end = std::chrono::steady_clock::now();
 
@@ -2234,7 +2242,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
 
         eigen_to_pose(T_global, global_point);
     }
-    pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud(geometry_msgs::msg::Pose map_pose, double radius){
+    pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud(geometry_msgs::msg::Pose map_pose, float radius){
         pcl::PointCloud<pcl::PointXYZ> output;
         int64_t converted_radius = radius * (float)scalar;
         int64_t hor_chunk_radius = converted_radius / ALT_CHUNK_LEN;
@@ -2580,7 +2588,7 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
     int icp_max_iterations = 15;
     float icp_trans_epsilon = 1e-5;
     float icp_fitness_epsilon = 1e-4;
-    double local_point_cloud_radius = 20.0;
+    float local_point_cloud_radius = 20.0;
 };
 
 int main(int argc, char ** argv)
