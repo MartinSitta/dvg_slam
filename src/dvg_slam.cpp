@@ -272,11 +272,11 @@ class DvgSlam : public rclcpp::Node{
 
         if(v2_mesher){
             RCLCPP_WARN(this->get_logger(), "Publishing final v2 mesh\n");
-            build_and_publish_mesh_v2(graph, publisher_);
+            //build_and_publish_mesh_v2(graph, publisher_);
         }
         else{
             RCLCPP_WARN(this->get_logger(), "Publishing final v1 mesh\n");
-            build_and_publish_mesh(graph, publisher_);
+            //build_and_publish_mesh(graph, publisher_);
         }
         if(v2_mesher){
             RCLCPP_WARN(this->get_logger(), "Creating v2 wavefront\n");
