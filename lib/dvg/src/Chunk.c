@@ -79,7 +79,9 @@ void chunk_decrease_occupancy(Chunk_t* chunk, uint16_t node_nr){
         return;
     }
     chunk->change_occurred = true;
-    number--;
+    //TEMPORARY TWEAK: REVERT THIS ASAP
+    //number = 0;
+    number--; //previous state
     bool write_bit_one = number & 1;
     bool write_bit_two = number & 2;
     if(write_bit_one){
