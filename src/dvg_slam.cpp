@@ -1,12 +1,16 @@
+#include <cstdint>
 #include <cstdio>
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <pcl/common/transforms.h>
 #include <pcl/impl/point_types.hpp>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/publisher.hpp>
 #include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include <string>
+#include "Chunk.h"
+#include "PointSlot.h"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include <climits>
@@ -36,21 +40,20 @@
 #include <pcl/registration/icp.h>
 #include <pcl/filters/random_sample.h>
 #include <pcl/filters/filter.h>
-#include "../lib/Dvg.h"
-#include "../lib/VoxelHashMap.h"
-#include "../lib/VoxelPriorityQueue.h"
-#include "../lib/DvgVector.h"
-#include "../lib/DynamicObjectRemoval.c"
+#include "Dvg.h"
+#include "VoxelHashMap.h"
+#include "VoxelPriorityQueue.h"
+#include "DvgVector.h"
+#include "DynamicObjectRemoval.h"
 #include "mesh_msgs/msg/mesh_geometry_stamped.hpp"
+#include "SphericalDedup.h"
 // ROS / messages
-#include "octomap_msgs/msg/octomap.hpp"
 
 // OctoMap core
 #include <octomap/octomap.h>
 #include <octomap/OcTree.h>
 
-// OctoMap-ROS helper conversions
-#include <octomap_msgs/conversions.h>   // binaryMapToMsg / fullMsgToMap helpers
+// OctoMap-ROS helper conversions  // binaryMapToMsg / fullMsgToMap helpers
 //#include <octomap_msgs/Octomap.h>      // (message header if you prefer)
 #include "dvg_slam/srv/get_path.hpp"
 //#include "mesh_tools.h"
@@ -1901,7 +1904,7 @@ class DvgSlam : public rclcpp::Node{
             return;
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dedup_cloud(
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_insertion_cloud(
             new pcl::PointCloud<pcl::PointXYZ>);
 
         VoxelHashMap_t* hashmap = voxel_hash_map_init(1 << 17, 30, 0.5f);
@@ -1920,50 +1923,57 @@ class DvgSlam : public rclcpp::Node{
             }
 
             voxel_hash_map_insert(hashmap, x, y, z);
-            dedup_cloud->push_back(p);
+            dvg_insertion_cloud->push_back(p);
         }
-
         voxel_hash_map_free(hashmap);
 
-        if (dedup_cloud->empty()) {
+        if (dvg_insertion_cloud->empty()) {
             RCLCPP_WARN(this->get_logger(), "pointcloud empty after de-duplication!");
             io_mutex.unlock();
             return;
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud(
-            new pcl::PointCloud<pcl::PointXYZ>);
-
-        pcl::transformPointCloud(*dedup_cloud, *transformed_cloud, combined_transform);
-
-        for (auto& p : transformed_cloud->points) {
-            p.x = p.x * static_cast<float>(scalar);
-            p.y = p.y * static_cast<float>(scalar);
-            p.z = p.z * static_cast<float>(scalar);
+        spherical_dedup_wipe_arr();
+        for (const auto& p : raw_cloud->points) {
+            spherical_dedup_request(
+                    global_point.position.x * static_cast<float>(scalar),
+                    global_point.position.y * static_cast<float>(scalar),
+                    global_point.position.z * static_cast<float>(scalar),
+                    p.x * static_cast<float>(scalar),
+                    p.y * static_cast<float>(scalar),
+                    p.z * static_cast<float>(scalar)
+                );
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud(
-            new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr icp_input_cloud;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dor_input_cloud;
 
-        pcl::RandomSample<pcl::PointXYZ> rs;
-        rs.setInputCloud(transformed_cloud);
 
-        int sample_count = static_cast<int>(
-            static_cast<float>(transformed_cloud->size()) * icp_sample_ratio);
+        for (uint32_t angle_bucket = 0; angle_bucket < DVG_ANGLE_BUCKETS; angle_bucket++){
+            DvgSphericalAngleEntry entry = spherical_dedup_get_entry(angle_bucket);
+            pcl::PointXYZ icp_point;
+            pcl::PointXYZ dor_point;
+            icp_point.x = entry.icp_target.x;
+            icp_point.y = entry.icp_target.y;
+            icp_point.z = entry.icp_target.z;
+            icp_input_cloud->push_back(icp_point);
+            dor_point.x = entry.dynamic_object_removal_target.x;
+            dor_point.y = entry.dynamic_object_removal_target.y;
+            dor_point.z = entry.dynamic_object_removal_target.z;
+            dor_input_cloud->push_back(dor_point);
+        }
 
-        sample_count = std::max(sample_count, 1000);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_icp_cloud;
 
-        rs.setSeed(42);
-        rs.setSample(sample_count);
-        rs.filter(*downsampled_cloud);
-
-        sensor_scan_points = downsampled_cloud->points.size();
-
+        pcl::transformPointCloud(*icp_input_cloud, *transformed_icp_cloud, combined_transform);
+        sensor_scan_points = transformed_icp_cloud->points.size();
+        
         const auto local_map_start = std::chrono::steady_clock::now();
         float local_sensor_radius_margin = 1.0f;
         float scan_radius = std::min(local_point_cloud_radius, sqrtf(highest_sensor_points_distance) + local_sensor_radius_margin);
         pcl::PointCloud<pcl::PointXYZ> map_cloud =
-            get_local_pointcloud(global_point, scan_radius);
+            //get_local_pointcloud(global_point, scan_radius);
+            get_local_pointcloud_v2(transformed_icp_cloud);
 
         const auto local_map_end = std::chrono::steady_clock::now();
 
@@ -1972,8 +1982,9 @@ class DvgSlam : public rclcpp::Node{
 
         if (map_cloud.empty() || first_call_pc_in) {
             first_call_pc_in = false;
-
-            for (const auto& p : transformed_cloud->points) {
+            pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_input_cloud;
+            pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_input_cloud, combined_transform);
+            for (const auto& p : dvg_input_cloud->points) {
                 int64_t x_point = p.x;
                 int64_t y_point = p.y;
                 int64_t z_point = p.z;
@@ -2005,7 +2016,7 @@ class DvgSlam : public rclcpp::Node{
         const auto icp_start = std::chrono::steady_clock::now();
 
         bool converged = run_icp(
-            *downsampled_cloud,
+            *transformed_icp_cloud,
             map_cloud,
             &corrected_cloud,
             &corrective_transform,
@@ -2085,12 +2096,13 @@ class DvgSlam : public rclcpp::Node{
             dynamic_map_entry_cap = dynamic_map_entry_cap * 0.7;
         }
 
-        // Apply correction to the transformed cloud.
+        // Apply correction to the combined transform.
         // corrective_transform is in scaled map units.
-        pcl::transformPointCloud(
-            *transformed_cloud,
-            *transformed_cloud,
-            corrective_transform);
+        combined_transform = combined_transform * corrective_transform;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dor_output_cloud;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_output_cloud;
+        pcl::transformPointCloud(*dor_input_cloud, *dor_output_cloud, combined_transform);
+        pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_output_cloud, combined_transform);
 
         // Build correction transform for the robot pose.
         Eigen::Affine3f T_correction = Eigen::Affine3f::Identity();
@@ -2138,7 +2150,7 @@ class DvgSlam : public rclcpp::Node{
 
         const auto pc_start = std::chrono::steady_clock::now();
 
-        for (const auto& p : transformed_cloud->points) {
+        for (const auto& p : dor_output_cloud->points) {
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
@@ -2156,7 +2168,7 @@ class DvgSlam : public rclcpp::Node{
                 scalar);
         }
 
-        for (const auto& p : transformed_cloud->points) {
+        for (const auto& p : dvg_output_cloud->points) {
             int64_t x_point = p.x;
             int64_t y_point = p.y;
             int64_t z_point = p.z;
@@ -2241,6 +2253,29 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
         T_global = T_global * T_delta;
 
         eigen_to_pose(T_global, global_point);
+    }
+    pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud_v2(pcl::PointCloud<pcl::PointXYZ>::Ptr input){
+        int64_t x;
+        int64_t y; 
+        int64_t z;
+        VoxelHashMap_t* chunk_anchor_dedup = voxel_hash_map_init(8192 << 2, 10, 0.6);
+        std::vector<Chunk_t*> chunks;
+        pcl::PointCloud<pcl::PointXYZ> output;
+        for(const auto p: *input){
+            x = chunk_build_anchor_coord(p.x);
+            y = chunk_build_anchor_coord(p.y);
+            z = chunk_build_anchor_coord(p.z);
+            PointSlot_t* slot = voxel_hash_map_lookup(chunk_anchor_dedup, x, y, z);
+            if(slot == NULL){
+                voxel_hash_map_insert(chunk_anchor_dedup, x, y, z);
+                chunks.push_back(dvg_chunk_hash_table_lookup(graph, x, y, z));
+            }
+        }
+        voxel_hash_map_free(chunk_anchor_dedup);
+        for(const auto c:chunks){
+            add_to_pcl_cloud(&output, c);
+        }
+        return output;
     }
     pcl::PointCloud<pcl::PointXYZ> get_local_pointcloud(geometry_msgs::msg::Pose map_pose, float radius){
         pcl::PointCloud<pcl::PointXYZ> output;
@@ -2555,7 +2590,6 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subscription_two; 
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_three;
-    rclcpp::Subscription<octomap_msgs::msg::Octomap>::SharedPtr octomap_binary_subscription;
     size_t count_;
     std::mutex io_mutex;
     geometry_msgs::msg::Pose global_point;

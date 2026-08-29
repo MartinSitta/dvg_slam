@@ -37,7 +37,7 @@ extern "C" {
 
 #ifndef DVG_SPHERICAL_BACKEND
 #define DVG_SPHERICAL_BACKEND \
-    DVG_SPHERICAL_BACKEND_SQUARED_LUT
+    DVG_SPHERICAL_BACKEND_EXACT_TRIG
 #endif
 
 
@@ -107,7 +107,9 @@ _Static_assert(
 typedef struct
 {
     float longest_dist_squared;
-    DvgVector_t dynamic_object_removal_target;
+    float shortest_dist_squared;
+    DvgVector_t dynamic_object_removal_target; //furthest away point
+    DvgVector_t icp_target;//nearest point
 } DvgSphericalAngleEntry;
 
 
@@ -135,6 +137,9 @@ void spherical_dedup_request(
 DvgSphericalAngleEntry spherical_dedup_get_entry(uint32_t index);
 
 
+DvgSphericalAngleEntry spherical_dedup_set_icp_entry(uint32_t index, DvgVector_t vector);
+
+DvgSphericalAngleEntry spherical_dedup_set_dynamic_object_removal_entry(uint32_t index, DvgVector_t vector);
 /*
  * Legacy declarations retained for compatibility with existing callers.
  * They are unrelated to backend selection.

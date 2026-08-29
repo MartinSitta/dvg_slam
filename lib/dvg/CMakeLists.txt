@@ -10,7 +10,6 @@ add_library(dvg STATIC
     src/VoxelHashMap.c
     src/VoxelPriorityQueue.c
     src/SphericalDedup.c
-    # Add the remaining .c files here.
 )
 
 target_include_directories(dvg
@@ -18,7 +17,6 @@ target_include_directories(dvg
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Needed for functions from <math.h> on Linux.
 if(UNIX)
     target_link_libraries(dvg PUBLIC m)
 endif()

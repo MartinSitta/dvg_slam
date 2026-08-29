@@ -638,16 +638,28 @@ DvgSphericalAngleEntry spherical_dedup_get_entry(uint32_t index)
     return angle_table[index];
 }
 
+DvgSphericalAngleEntry spherical_dedup_set_icp_entry(uint32_t index, DvgVector_t vector){
+    angle_table[index].icp_target = vector;
+}
+
+DvgSphericalAngleEntry spherical_dedup_set_dynaminc_object_removal_entry(uint32_t index, DvgVector_t vector){
+    angle_table[index].dynamic_object_removal_target = vector;
+}
 
 void spherical_dedup_wipe_arr(void)
 {
     for (uint32_t i = 0; i < DVG_ANGLE_BUCKETS; i++)
     {
         angle_table[i].longest_dist_squared = 0.0f;
+        angle_table[i].shortest_dist_squared = 9999.9f;
 
         angle_table[i].dynamic_object_removal_target.x = 0.0;
         angle_table[i].dynamic_object_removal_target.y = 0.0;
         angle_table[i].dynamic_object_removal_target.z = 0.0;
+        
+        angle_table[i].icp_target.x = 0.0;
+        angle_table[i].icp_target.y = 0.0;
+        angle_table[i].icp_target.z = 0.0;
     }
 }
 
@@ -745,6 +757,23 @@ void spherical_dedup_request(
 
         angle_table[index]
             .dynamic_object_removal_target.z =
+            dest_z;
+    }
+    if (angle_table[index].shortest_dist_squared > dist_squared)
+    {
+        angle_table[index].shortest_dist_squared =
+            (float)dist_squared;
+
+        angle_table[index]
+            .icp_target.x =
+            dest_x;
+
+        angle_table[index]
+            .icp_target.y =
+            dest_y;
+
+        angle_table[index]
+            .icp_target.z =
             dest_z;
     }
 }
