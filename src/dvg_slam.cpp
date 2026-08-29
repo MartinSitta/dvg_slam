@@ -1889,6 +1889,8 @@ class DvgSlam : public rclcpp::Node{
         base_to_pose = Eigen::Translation3f(t) * q;
 
         Eigen::Affine3f combined_transform = base_to_pose * sensor_to_base;
+        Eigen::Affine3f combined_transform_scaled = combined_transform;
+        combined_transform_scaled.translation() *= static_cast<float>(scalar);
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr raw_cloud(
             new pcl::PointCloud<pcl::PointXYZ>);
@@ -1897,7 +1899,6 @@ class DvgSlam : public rclcpp::Node{
 
         std::vector<int> nan_indices;
         pcl::removeNaNFromPointCloud(*raw_cloud, *raw_cloud, nan_indices);
-
         if (raw_cloud->empty()) {
             RCLCPP_WARN(this->get_logger(), "pointcloud empty after NaN removal!");
             io_mutex.unlock();
@@ -1923,7 +1924,11 @@ class DvgSlam : public rclcpp::Node{
             }
 
             voxel_hash_map_insert(hashmap, x, y, z);
-            dvg_insertion_cloud->push_back(p);
+            pcl::PointXYZ insertion_point;
+            insertion_point.x = x;
+            insertion_point.y = y;
+            insertion_point.z = z;
+            dvg_insertion_cloud->push_back(insertion_point);
         }
         voxel_hash_map_free(hashmap);
 
@@ -1936,21 +1941,28 @@ class DvgSlam : public rclcpp::Node{
         spherical_dedup_wipe_arr();
         for (const auto& p : raw_cloud->points) {
             spherical_dedup_request(
-                    global_point.position.x * static_cast<float>(scalar),
-                    global_point.position.y * static_cast<float>(scalar),
-                    global_point.position.z * static_cast<float>(scalar),
+                    0,
+                    0,
+                    0,
                     p.x * static_cast<float>(scalar),
                     p.y * static_cast<float>(scalar),
                     p.z * static_cast<float>(scalar)
                 );
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr icp_input_cloud;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dor_input_cloud;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr icp_input_cloud(
+    new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dor_input_cloud(
+    new pcl::PointCloud<pcl::PointXYZ>);
+        
+        
 
 
         for (uint32_t angle_bucket = 0; angle_bucket < DVG_ANGLE_BUCKETS; angle_bucket++){
             DvgSphericalAngleEntry entry = spherical_dedup_get_entry(angle_bucket);
+            if  (entry.longest_dist_squared <= 0.0f) {
+                continue;
+            }
             pcl::PointXYZ icp_point;
             pcl::PointXYZ dor_point;
             icp_point.x = entry.icp_target.x;
@@ -1963,9 +1975,9 @@ class DvgSlam : public rclcpp::Node{
             dor_input_cloud->push_back(dor_point);
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_icp_cloud;
-
-        pcl::transformPointCloud(*icp_input_cloud, *transformed_icp_cloud, combined_transform);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_icp_cloud(
+    new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::transformPointCloud(*icp_input_cloud, *transformed_icp_cloud, combined_transform_scaled);
         sensor_scan_points = transformed_icp_cloud->points.size();
         
         const auto local_map_start = std::chrono::steady_clock::now();
@@ -1982,9 +1994,8 @@ class DvgSlam : public rclcpp::Node{
 
         if (map_cloud.empty() || first_call_pc_in) {
             first_call_pc_in = false;
-            pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_input_cloud;
-            pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_input_cloud, combined_transform);
-            for (const auto& p : dvg_input_cloud->points) {
+            pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_insertion_cloud, combined_transform_scaled);
+            for (const auto& p : dvg_insertion_cloud->points) {
                 int64_t x_point = p.x;
                 int64_t y_point = p.y;
                 int64_t z_point = p.z;
@@ -2098,11 +2109,13 @@ class DvgSlam : public rclcpp::Node{
 
         // Apply correction to the combined transform.
         // corrective_transform is in scaled map units.
-        combined_transform = combined_transform * corrective_transform;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dor_output_cloud;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_output_cloud;
-        pcl::transformPointCloud(*dor_input_cloud, *dor_output_cloud, combined_transform);
-        pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_output_cloud, combined_transform);
+        combined_transform_scaled = corrective_transform * combined_transform_scaled;
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dor_output_cloud(
+    new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_output_cloud(
+    new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::transformPointCloud(*dor_input_cloud, *dor_output_cloud, combined_transform_scaled);
+        pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_output_cloud, combined_transform_scaled);
 
         // Build correction transform for the robot pose.
         Eigen::Affine3f T_correction = Eigen::Affine3f::Identity();
@@ -2273,7 +2286,9 @@ Eigen::Affine3f pose_to_eigen(const geometry_msgs::msg::Pose& pose)
         }
         voxel_hash_map_free(chunk_anchor_dedup);
         for(const auto c:chunks){
-            add_to_pcl_cloud(&output, c);
+            if(c != NULL){
+                add_to_pcl_cloud(&output, c);
+            }
         }
         return output;
     }

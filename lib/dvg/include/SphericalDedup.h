@@ -137,9 +137,9 @@ void spherical_dedup_request(
 DvgSphericalAngleEntry spherical_dedup_get_entry(uint32_t index);
 
 
-DvgSphericalAngleEntry spherical_dedup_set_icp_entry(uint32_t index, DvgVector_t vector);
+void spherical_dedup_set_icp_entry(uint32_t index, DvgVector_t vector);
 
-DvgSphericalAngleEntry spherical_dedup_set_dynamic_object_removal_entry(uint32_t index, DvgVector_t vector);
+void spherical_dedup_set_dynamic_object_removal_entry(uint32_t index, DvgVector_t vector);
 /*
  * Legacy declarations retained for compatibility with existing callers.
  * They are unrelated to backend selection.

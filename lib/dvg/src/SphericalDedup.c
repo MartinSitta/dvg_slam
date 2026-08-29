@@ -638,11 +638,11 @@ DvgSphericalAngleEntry spherical_dedup_get_entry(uint32_t index)
     return angle_table[index];
 }
 
-DvgSphericalAngleEntry spherical_dedup_set_icp_entry(uint32_t index, DvgVector_t vector){
+void spherical_dedup_set_icp_entry(uint32_t index, DvgVector_t vector){
     angle_table[index].icp_target = vector;
 }
 
-DvgSphericalAngleEntry spherical_dedup_set_dynaminc_object_removal_entry(uint32_t index, DvgVector_t vector){
+void spherical_dedup_set_dynaminc_object_removal_entry(uint32_t index, DvgVector_t vector){
     angle_table[index].dynamic_object_removal_target = vector;
 }
 
