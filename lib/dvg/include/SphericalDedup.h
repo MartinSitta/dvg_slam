@@ -122,12 +122,12 @@ const char *spherical_dedup_backend_name(void);
 void spherical_dedup_wipe_arr(void);
 
 void spherical_dedup_request(
-    int64_t org_x,
-    int64_t org_y,
-    int64_t org_z,
-    int64_t dest_x,
-    int64_t dest_y,
-    int64_t dest_z
+    double org_x,
+    double org_y,
+    double org_z,
+    double dest_x,
+    double dest_y,
+    double dest_z
 );
 
 /*

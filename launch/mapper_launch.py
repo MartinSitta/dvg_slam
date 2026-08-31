@@ -7,7 +7,7 @@ def generate_launch_description():
         Node(
             package='dvg_slam',
             namespace='dvg_slam',
-            executable='dvg_slam_node',
+            executable='dvg_slam',
             name='dvg_slam',
             parameters=[{
                 'in_topic': '/points', #input topic of type pointcloud_2

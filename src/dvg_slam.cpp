@@ -1915,9 +1915,9 @@ class DvgSlam : public rclcpp::Node{
             if(point_dist > highest_sensor_points_distance){
                 highest_sensor_points_distance = point_dist;
             }
-            int64_t x = static_cast<int64_t>(p.x * static_cast<float>(scalar));
-            int64_t y = static_cast<int64_t>(p.y * static_cast<float>(scalar));
-            int64_t z = static_cast<int64_t>(p.z * static_cast<float>(scalar));
+            int64_t x = std::llround(p.x * scalar);
+            int64_t y = std::llround(p.y * scalar);
+            int64_t z = std::llround(p.z * scalar);
 
             if (voxel_hash_map_lookup(hashmap, x, y, z)) {
                 continue;
@@ -1967,12 +1967,12 @@ class DvgSlam : public rclcpp::Node{
             pcl::PointXYZ dor_point;
             icp_point.x = entry.icp_target.x;
             icp_point.y = entry.icp_target.y;
-            icp_point.z = entry.icp_target.z;
-            icp_input_cloud->push_back(icp_point);
+            icp_point.z = entry.icp_target.z; 
             dor_point.x = entry.dynamic_object_removal_target.x;
             dor_point.y = entry.dynamic_object_removal_target.y;
             dor_point.z = entry.dynamic_object_removal_target.z;
             dor_input_cloud->push_back(dor_point);
+            icp_input_cloud->push_back(dor_point); //NOTE: THIS IS PURELY EXPERIMENTAL
         }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_icp_cloud(
@@ -1996,9 +1996,9 @@ class DvgSlam : public rclcpp::Node{
             first_call_pc_in = false;
             pcl::transformPointCloud(*dvg_insertion_cloud, *dvg_insertion_cloud, combined_transform_scaled);
             for (const auto& p : dvg_insertion_cloud->points) {
-                int64_t x_point = p.x;
-                int64_t y_point = p.y;
-                int64_t z_point = p.z;
+                int64_t x_point = std::llround(p.x);
+                int64_t y_point = std::llround(p.y);
+                int64_t z_point = std::llround(p.z);
 
                 dvg_insert(graph, x_point, y_point, z_point);
             }
@@ -2109,7 +2109,11 @@ class DvgSlam : public rclcpp::Node{
 
         // Apply correction to the combined transform.
         // corrective_transform is in scaled map units.
-        combined_transform_scaled = corrective_transform * combined_transform_scaled;
+        Eigen::Affine3f corrective_transform_scaled = Eigen::Affine3f::Identity();
+        corrective_transform_scaled.matrix() = corrective_transform;
+
+        combined_transform_scaled =
+            corrective_transform_scaled * combined_transform_scaled;
         pcl::PointCloud<pcl::PointXYZ>::Ptr dor_output_cloud(
     new pcl::PointCloud<pcl::PointXYZ>);
         pcl::PointCloud<pcl::PointXYZ>::Ptr dvg_output_cloud(
@@ -2134,12 +2138,12 @@ class DvgSlam : public rclcpp::Node{
         // Write back into global_point.
         eigen_to_pose(T_global, global_point);
 
-        int64_t robot_point_x =
-            global_point.position.x * static_cast<float>(scalar);
+        int64_t robot_point_x = 
+            std::llround(global_point.position.x * static_cast<float>(scalar));
         int64_t robot_point_y =
-            global_point.position.y * static_cast<float>(scalar);
+            std::llround(global_point.position.y * static_cast<float>(scalar));
         int64_t robot_point_z =
-            global_point.position.z * static_cast<float>(scalar);
+            std::llround(global_point.position.z * static_cast<float>(scalar));
 
         const auto pose_end = std::chrono::steady_clock::now();
 
@@ -2164,9 +2168,9 @@ class DvgSlam : public rclcpp::Node{
         const auto pc_start = std::chrono::steady_clock::now();
 
         for (const auto& p : dor_output_cloud->points) {
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
+            int64_t x_point = std::llround(p.x);
+            int64_t y_point = std::llround(p.y);
+            int64_t z_point = std::llround(p.z);
 
             dynamic_object_removal(
                 graph,
@@ -2182,9 +2186,9 @@ class DvgSlam : public rclcpp::Node{
         }
 
         for (const auto& p : dvg_output_cloud->points) {
-            int64_t x_point = p.x;
-            int64_t y_point = p.y;
-            int64_t z_point = p.z;
+            int64_t x_point = std::llround(p.x);
+            int64_t y_point = std::llround(p.y);
+            int64_t z_point = std::llround(p.z);
 
             dvg_insert(graph, x_point, y_point, z_point);
         }

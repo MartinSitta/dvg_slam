@@ -1,6 +1,7 @@
 #include "DvgVector.h"
 #include <SphericalDedup.h>
 
+#include <math.h>
 #include <stdint.h>
 #include <math.h>
 #include <stdbool.h>
@@ -651,7 +652,7 @@ void spherical_dedup_wipe_arr(void)
     for (uint32_t i = 0; i < DVG_ANGLE_BUCKETS; i++)
     {
         angle_table[i].longest_dist_squared = 0.0f;
-        angle_table[i].shortest_dist_squared = 9999.9f;
+        angle_table[i].shortest_dist_squared = INFINITY;
 
         angle_table[i].dynamic_object_removal_target.x = 0.0;
         angle_table[i].dynamic_object_removal_target.y = 0.0;
@@ -665,12 +666,12 @@ void spherical_dedup_wipe_arr(void)
 
 
 void spherical_dedup_request(
-    int64_t org_x,
-    int64_t org_y,
-    int64_t org_z,
-    int64_t dest_x,
-    int64_t dest_y,
-    int64_t dest_z)
+    double org_x,
+    double org_y,
+    double org_z,
+    double dest_x,
+    double dest_y,
+    double dest_z)
 {
     /*
      * DvgVector_t stores doubles. Cast before subtraction so the subtraction
